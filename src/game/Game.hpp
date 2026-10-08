@@ -145,6 +145,7 @@ Simulator::cCity* CityOf(Simulator::cGameData* object);
 bool CityDefenseless(Simulator::cCity* city);
 bool AttackCity(Simulator::cVehicle* v, Simulator::cCity* city);
 bool CinematicPlaying();
+bool CityEditorOpen();
 bool OverCityRollover();
 void PlayRefusal();
 void HideCityRollover();

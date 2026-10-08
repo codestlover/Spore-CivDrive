@@ -51,6 +51,7 @@ static_assert(offsetof(cCityWalls, mGatesTransformed) == 0x198, "cCityWalls::mGa
 static_assert(offsetof(cCityWalls, mOuterRadius) == 0x25c, "cCityWalls::mOuterRadius");
 static_assert(offsetof(cCivilization, mPoliticalID) == 0x30, "cCivilization political ID");
 static_assert(offsetof(App::cCameraManager, mpViewer) == 0xb0, "cCameraManager::mpViewer");
+static_assert(offsetof(App::cCameraManager, mnActiveIndex) == 0xa8, "cCameraManager::mnActiveIndex");
 static_assert(offsetof(cGameModeManager, mActiveModeID) == 0x20, "cGameModeManager::mActiveModeID");
 
 namespace game {
@@ -170,7 +171,7 @@ vm::V3 FromSdk(const Math::Vector3& v) {
 bool terrainCursorOk = false, viewManagerOk = false, cursorOk = false, rangeOk = false, audioOk = false,
      minimapOk = false, rolloverOk = false, soundOk = false, listenerHookOk = false, minimapCameraOk = false,
      tribeOk = false, shadowOk = false, orderHookOk = false, claimOk = false, stanceOk = false, vehiclesOk = false,
-     cinematicOk = false, cityAttackOk = false;
+     cinematicOk = false, cityAttackOk = false, cityEditorOk = false;
 }
 
 bool CursorHookUsable() {
@@ -287,6 +288,8 @@ bool Verify() {
                    Bytes(0xbd9cc0, "53568bb154030000578bb95803000033") &&
                    Bytes(0xc9efc0, "8b4424048981280d00008981240d0000") && Bytes(0xdcd3ef, "8b471033f683e802") &&
                    Bytes(0xdce930, "6832229bee");
+    cityEditorOk = Bytes(0xcfe55a, "8b8ee80000008b898000000085c9740653") && Bytes(0xd124e5, "8bd9837b400056570f84") &&
+                   Bytes(0xcf4bbc, "89b780000000");
     cinematicOk = uintptr_t(GetAddress(Simulator::cCinematicManager, Get)) == Va<uintptr_t>(0xb3d5d0) &&
                   Bytes(0xe35341, "8b402c83f801740983f802");
     soundOk = Bytes(raw::NewAudioTrack, "558bec83ec08e815a35e008945fc837d") &&
@@ -866,6 +869,15 @@ bool AttackCity(cVehicle* v, cCity* city) {
     Va<void(__thiscall*)(cVehicle*, cGameData*, int, int)>(raw::AddOrder)(v, city, 2, 1);
     Va<void(__thiscall*)(cVehicle*, int)>(0xc9efc0)(v, 0);
     return CurrentOrderTarget(v) == city;
+}
+
+bool CityEditorOpen() {
+    if (!cityEditorOk)
+        return false;
+    auto* civ = static_cast<char*>(Va<void* (*)()>(raw::GameCivGet)());
+    auto* controller = civ ? *reinterpret_cast<char**>(civ + raw::GameCivUiController) : nullptr;
+    auto* editor = controller ? *reinterpret_cast<char**>(controller + 0x80) : nullptr;
+    return editor && *reinterpret_cast<void**>(editor + 0x40);
 }
 
 bool CinematicPlaying() {

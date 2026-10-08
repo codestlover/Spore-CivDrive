@@ -103,8 +103,9 @@ void __fastcall HkSetOri(void* self, void*, const void* q) {
 }
 
 void __fastcall HkCamUpdate(void* self, void*, int dt) {
-    auto* viewer = static_cast<App::cCameraManager*>(self)->mpViewer;
-    if (pilot::FreezeNativeCamera()) {
+    auto* manager = static_cast<App::cCameraManager*>(self);
+    auto* viewer = manager->mpViewer;
+    if (pilot::FreezeNativeCamera(manager->mnActiveIndex)) {
         pilot::CameraFrame(viewer, dt, false);
         return;
     }

@@ -15,7 +15,7 @@ bool OnMouseMove(uint32_t& mouseState);
 bool OnMouseWheel(int delta);
 
 void AfterCivUpdate(float realSeconds);
-bool FreezeNativeCamera();
+bool FreezeNativeCamera(int activeCamera);
 void CameraFrame(App::cViewer* viewer, int deltaMs, bool nativeRan);
 void OnAppUpdate();
 

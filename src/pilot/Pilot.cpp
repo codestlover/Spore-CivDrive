@@ -109,6 +109,8 @@ struct State {
     DWORD rolloverTick = 0;
     DWORD rolloverClickTick = 0;
     bool cinematic = false;
+    int activeCamera = -2;
+    int pilotCamera = -2;
 
     cVehicle* pending = nullptr;
 };
@@ -923,6 +925,7 @@ void Enter(cVehicle* v) {
     bool haveStart = false;
     if (S.mode == Mode::Idle) {
         haveStart = S.viewer && game::ReadViewer(S.viewer, start);
+        S.pilotCamera = S.activeCamera;
     } else {
         start = S.last;
         haveStart = S.haveLast;
@@ -1017,8 +1020,13 @@ void StartCinematic() {
         b = false;
 }
 
+bool OtherView() {
+    return game::CinematicPlaying() || game::CityEditorOpen() ||
+           (S.pilotCamera >= 0 && S.activeCamera != S.pilotCamera);
+}
+
 bool UpdateCinematic() {
-    bool playing = game::CinematicPlaying();
+    bool playing = OtherView();
     if (playing) {
         StartCinematic();
     } else if (S.cinematic) {
@@ -1271,10 +1279,11 @@ void AfterCivUpdate(float realSeconds) {
     FeedListeners();
 }
 
-bool FreezeNativeCamera() {
+bool FreezeNativeCamera(int activeCamera) {
+    S.activeCamera = activeCamera;
     if (!Piloting())
         return false;
-    if (game::CinematicPlaying())
+    if (OtherView())
         StartCinematic();
     return !S.cinematic;
 }
