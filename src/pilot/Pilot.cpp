@@ -106,7 +106,9 @@ struct State {
     bool ownAct = false;
     bool uiOrderSet = false;
     const void* uiOrder = nullptr;
-    DWORD captureTick = 0;
+    DWORD rolloverTick = 0;
+    DWORD rolloverClickTick = 0;
+    bool cinematic = false;
 
     cVehicle* pending = nullptr;
 };
@@ -558,12 +560,14 @@ void AttackRelease() {
 }
 
 void UpdateAim() {
-    bool overUI = game::MouseOverUI();
+    bool overUI = game::MouseOverUI() && !game::OverCityRollover();
     S.hover = overUI ? nullptr : game::PickHovered();
     if (S.hover && game::AsVehicle(S.hover) == S.veh)
         S.hover = nullptr;
     bool nativeFresh = Now() - S.nativeCursorTick < 300;
     S.hoverValid = S.hover && (nativeFresh ? IsActionCursor(S.nativeCursor) : TypeValid(S.hover));
+    if (S.hover && game::IsCityHall(S.hover))
+        S.hoverValid = false;
 
     if (S.loco == kVehicleAir && S.firing) {
         if (!Down(VK_LBUTTON) || !game::GameHasFocus()) {
@@ -848,6 +852,7 @@ void FeedListeners() {
 
 void Unlock() {
     S.lock = nullptr;
+    S.cinematic = false;
     if (S.veh) {
         if (S.firing)
             game::ClearOrders(S.veh);
@@ -971,6 +976,51 @@ void IdleShift() {
     S.shiftWas = sh;
 }
 
+void StartCinematic() {
+    if (S.cinematic)
+        return;
+    S.cinematic = true;
+    S.orbit = false;
+    S.hover = nullptr;
+    S.hoverValid = false;
+    S.speed = 0;
+    if (S.firing) {
+        S.firing = false;
+        S.fireTarget = nullptr;
+    }
+    RestoreCursor();
+    overlay::Clear();
+    fx::Set(0, 1, 0);
+    game::WantCityRolloverHidden(false);
+    for (auto& k : S.swallowKey)
+        k = false;
+    for (auto& b : S.swallowBtn)
+        b = false;
+}
+
+bool UpdateCinematic() {
+    bool playing = game::CinematicPlaying();
+    if (playing) {
+        StartCinematic();
+    } else if (S.cinematic) {
+        S.cinematic = false;
+        game::CamXf native;
+        if (S.viewer && game::ReadViewer(S.viewer, native)) {
+            S.from = native;
+            S.t = 0;
+            S.dur = cfg::Get().enterSeconds;
+            S.mode = Mode::Entering;
+            fx::Ensure();
+        }
+        S.escWas = Down(VK_ESCAPE);
+        S.shiftWas = Down(VK_SHIFT);
+        S.lastShiftTick = 0;
+    }
+    if (S.cinematic)
+        Drive(0);
+    return S.cinematic;
+}
+
 bool Validate() {
     return game::InCiv() && game::PlanetReady() && S.veh && game::VehicleAlive(S.veh) &&
            S.veh->cGameData::mPoliticalID == game::PlayerPoliticalID();
@@ -997,6 +1047,8 @@ bool ControlledKey(int vk) {
 }
 
 bool OnKeyDown(int vk) {
+    if (S.cinematic)
+        return false;
     if (vk == VK_ESCAPE) {
         if (Piloting())
             BeginExit(false);
@@ -1040,6 +1092,8 @@ bool SwitchClick(float x, float y) {
 
 bool OnMouseDown(int button, float x, float y) {
     int idx = button - 1000;
+    if (S.cinematic)
+        return false;
     if (Piloting()) {
         if (idx >= 0 && idx < 8)
             S.swallowBtn[idx] = true;
@@ -1096,13 +1150,13 @@ bool OnMouseUp(int button) {
 }
 
 bool OnMouseMove(uint32_t& state) {
-    if (Piloting())
+    if (Piloting() && !S.cinematic)
         state &= ~uint32_t(8 | 16 | 32);
     return false;
 }
 
 bool OnMouseWheel(int delta) {
-    if (!Piloting())
+    if (!Piloting() || S.cinematic)
         return false;
     S.wheel += delta;
     return true;
@@ -1126,6 +1180,8 @@ void AfterCivUpdate(float realSeconds) {
         BeginExit(game::InCiv());
         return;
     }
+    if (UpdateCinematic())
+        return;
 
     bool focus = game::GameHasFocus();
     bool esc = focus && Down(VK_ESCAPE);
@@ -1153,10 +1209,12 @@ void AfterCivUpdate(float realSeconds) {
     UpdateClaim();
     if (!RaidDocking())
         Drive(float(simMs) / 1000.0f);
-    if (S.hover && game::CityCapturable(S.hover))
-        S.captureTick = Now();
+    if (S.hover && game::IsCityHall(S.hover))
+        S.rolloverTick = Now();
+    if (focus && Down(VK_LBUTTON) && game::OverCityRollover())
+        S.rolloverClickTick = Now();
     bool keepRollover =
-        S.captureTick && (Now() - S.captureTick < 1200 || (game::MouseOverUI() && Now() - S.captureTick < 6000));
+        S.rolloverTick && (Now() - S.rolloverTick < 400 || (game::OverCityRollover() && Now() - S.rolloverTick < 8000));
     game::WantCityRolloverHidden(S.mode == Mode::Active && !keepRollover);
     if (S.mode == Mode::Active && !keepRollover)
         game::HideCityRollover();
@@ -1195,7 +1253,11 @@ void AfterCivUpdate(float realSeconds) {
 }
 
 bool FreezeNativeCamera() {
-    return Piloting();
+    if (!Piloting())
+        return false;
+    if (game::CinematicPlaying())
+        StartCinematic();
+    return !S.cinematic;
 }
 
 void CameraFrame(App::cViewer* viewer, int deltaMs, bool nativeRan) {
@@ -1204,7 +1266,8 @@ void CameraFrame(App::cViewer* viewer, int deltaMs, bool nativeRan) {
         overlay::SetViewer(viewer);
     }
     if (Piloting()) {
-        FeedListeners();
+        if (!S.cinematic)
+            FeedListeners();
         return;
     }
     if (!nativeRan || S.mode != Mode::Exiting || !S.viewer)
@@ -1268,7 +1331,7 @@ bool VelocityFor(const void* locomotive, float out[3]) {
 uint32_t FilterCursor(uint32_t id) {
     S.nativeCursor = id;
     S.nativeCursorTick = Now();
-    if (S.mode != Mode::Active)
+    if (S.mode != Mode::Active || S.cinematic)
         return id;
     if (id == kCursorGoodieHut)
         return kCursorDefault;
@@ -1294,7 +1357,7 @@ bool RefuseOrder(const void* vehicle, const void* target, uint32_t va) {
         return false;
     if (S.ownAct)
         return false;
-    if (va >= 0xcf2000 && va < 0xcf8000) {
+    if ((va >= 0xcf2000 && va < 0xcf8000) || (S.rolloverClickTick && Now() - S.rolloverClickTick < 600)) {
         S.uiOrderSet = true;
         S.uiOrder = target;
         return false;
@@ -1311,7 +1374,7 @@ bool ListenerOverride(int index, const float* gamePos, const float* gameRot, flo
         std::memcpy(L.gameRot[index], gameRot, sizeof(L.gameRot[index]));
         L.haveRot[index] = true;
     }
-    if (!Piloting() || !S.veh)
+    if (!Piloting() || !S.veh || S.cinematic)
         return false;
     V3 p = ListenerWanted(index);
     if (!vm::Finite(p))

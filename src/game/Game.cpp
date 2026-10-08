@@ -17,6 +17,7 @@
 #include <Spore/Simulator/SubSystem/GameViewManager.h>
 #include <Spore/Simulator/SubSystem/GameTimeManager.h>
 #include <Spore/Simulator/SubSystem/PlanetModel.h>
+#include <Spore/Simulator/SubSystem/CinematicManager.h>
 #include <Spore/UTFWin/IWindowManager.h>
 #include <Spore/UTFWin/IWindow.h>
 #include <Spore/UTFWin/CursorManager.h>
@@ -168,7 +169,8 @@ vm::V3 FromSdk(const Math::Vector3& v) {
 
 bool terrainCursorOk = false, viewManagerOk = false, cursorOk = false, rangeOk = false, audioOk = false,
      minimapOk = false, rolloverOk = false, soundOk = false, listenerHookOk = false, minimapCameraOk = false,
-     tribeOk = false, shadowOk = false, orderHookOk = false, claimOk = false, stanceOk = false, vehiclesOk = false;
+     tribeOk = false, shadowOk = false, orderHookOk = false, claimOk = false, stanceOk = false, vehiclesOk = false,
+     cinematicOk = false;
 }
 
 bool CursorHookUsable() {
@@ -281,6 +283,8 @@ bool Verify() {
     rolloverOk = Bytes(0xcf4f35, "8986e4000000") && Bytes(0xe35796, "8b4b1089b1a8000000") &&
                  Bytes(raw::RolloverRootWindow, "8b41486a015083c10ce89284feffc3cc") &&
                  Slot(raw::CursorAttachmentVtable, 0x10, 0xe35320);
+    cinematicOk = uintptr_t(GetAddress(Simulator::cCinematicManager, Get)) == Va<uintptr_t>(0xb3d5d0) &&
+                  Bytes(0xe35341, "8b402c83f801740983f802");
     soundOk = Bytes(raw::NewAudioTrack, "558bec83ec08e815a35e008945fc837d") &&
               uintptr_t(GetAddress(Audio, PlayAudio)) == Va<uintptr_t>(0x436390);
 
@@ -830,21 +834,18 @@ cVehicle* SelectedPlayerVehicle() {
     return nullptr;
 }
 
-bool CityCapturable(cGameData* hovered) {
-    auto* sp = hovered ? static_cast<cSpatialObject*>(Cast(hovered, 0x1186577)) : nullptr;
-    auto* pm = Planet();
-    if (!sp || !pm)
+bool IsCityHall(cGameData* object) {
+    return object && Cast(object, 0x1007AE63);
+}
+
+bool CinematicPlaying() {
+    if (!cinematicOk)
         return false;
-    Math::Vector3 v = sp->mPosition;
-    auto* city = Sdk<cCity*(__thiscall*)(cPlanetModel*, const Math::Vector3*)>(
-        GetAddress(Simulator::cPlanetModel, GetNearestCity))(pm, &v);
-    if (!city || city->cGameData::mPoliticalID == PlayerPoliticalID() || city->cGameData::mbIsDestroyed)
+    auto* manager = Sdk<char* (*)()>(GetAddress(Simulator::cCinematicManager, Get))();
+    if (!manager)
         return false;
-    vm::V3 c;
-    float r;
-    if (!NearestCityDisc(FromSdk(v), c, r) || vm::Len(FromSdk(v) - c) > r + 10.0f)
-        return false;
-    return city->mBuildings.empty();
+    int state = *reinterpret_cast<int*>(manager + 0x2c);
+    return state == 1 || state == 2;
 }
 
 void PlayRefusal() {
@@ -867,20 +868,39 @@ void HideCityRolloverIfWanted() {
         HideCityRollover();
 }
 
-void HideCityRollover() {
+UTFWin::IWindow* CityRolloverRoot() {
     if (!rolloverOk)
-        return;
+        return nullptr;
     auto* civ = static_cast<char*>(Va<void* (*)()>(raw::GameCivGet)());
     auto* controller = civ ? *reinterpret_cast<char**>(civ + raw::GameCivUiController) : nullptr;
     auto* attachment = controller ? *reinterpret_cast<char**>(controller + raw::UiControllerAttachment) : nullptr;
     if (!attachment || !HasSlot(attachment, 0x10, 0xe35320))
-        return;
+        return nullptr;
     auto* rollover = *reinterpret_cast<char**>(attachment + 0x10);
     if (!rollover)
-        return;
-    auto* w = Va<UTFWin::IWindow*(__thiscall*)(void*)>(raw::RolloverRootWindow)(rollover);
+        return nullptr;
+    return Va<UTFWin::IWindow*(__thiscall*)(void*)>(raw::RolloverRootWindow)(rollover);
+}
+
+void HideCityRollover() {
+    auto* w = CityRolloverRoot();
     if (w && w->IsVisible())
         w->SetFlag(UTFWin::kWinFlagVisible, false);
+}
+
+bool OverCityRollover() {
+    auto* root = CityRolloverRoot();
+    auto* wm = Windows();
+    HWND hwnd = GameWindow();
+    if (!root || !root->IsVisible() || !wm || !hwnd)
+        return false;
+    POINT pt;
+    if (!GetCursorPos(&pt) || !ScreenToClient(hwnd, &pt))
+        return false;
+    for (auto* w = wm->GetWindowAtPosition(Math::Point(float(pt.x), float(pt.y))); w; w = w->GetParent())
+        if (w == root)
+            return true;
+    return false;
 }
 
 int ConvertDeltaMs(int realMs) {
