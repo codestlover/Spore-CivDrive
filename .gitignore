@@ -1,0 +1,23 @@
+
+# Build outputs and dependencies prepared by cmake/setup.sh
+/build/
+/dist/
+/deps/
+/CMakeCache.txt
+/CMakeFiles/
+
+# Private, never published: the game's code, reverse-engineering, test and release tools, packaging, notes
+/research/
+/tests/
+/tools/
+/packaging/
+/backups/
+/releases/
+/docs/
+
+# Editor and tool caches
+/.test-venv/
+/.venv/
+/.ruff_cache/
+__pycache__/
+

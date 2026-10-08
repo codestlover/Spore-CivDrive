@@ -1,0 +1,30 @@
+
+BasedOnStyle: LLVM
+IndentWidth: 4
+ContinuationIndentWidth: 4
+TabWidth: 4
+UseTab: Never
+ColumnLimit: 120
+BreakBeforeBraces: Attach
+NamespaceIndentation: None
+AccessModifierOffset: -4
+PointerAlignment: Left
+ReferenceAlignment: Pointer
+DerivePointerAlignment: false
+SpaceBeforeParens: ControlStatements
+AlignAfterOpenBracket: Align
+AllowShortFunctionsOnASingleLine: Empty
+AllowShortBlocksOnASingleLine: Never
+AllowShortIfStatementsOnASingleLine: Never
+AllowShortLoopsOnASingleLine: false
+BreakStringLiterals: false
+SortIncludes: Never
+FixNamespaceComments: false
+ReflowComments: Never
+SeparateDefinitionBlocks: Always
+MaxEmptyLinesToKeep: 2
+KeepEmptyLines:
+  AtStartOfBlock: false
+  AtStartOfFile: true
+  AtEndOfFile: true
+
