@@ -155,6 +155,8 @@ void RestoreCursor() {
 uint32_t WantedCursor() {
     if (S.orbit && (S.orbitVk == VK_MBUTTON || S.orbitMoved > kClickSlop))
         return kCursorNone;
+    if (S.hoverValid && game::IsCityHall(S.hover))
+        return kCursorAttack;
     if (S.hoverValid)
         return IsActionCursor(S.nativeCursor) && Now() - S.nativeCursorTick < 300 ? S.nativeCursor : kCursorAttack;
     return 0;
@@ -504,9 +506,26 @@ int InActionRange(cGameData* t) {
     return vm::Len(game::Position(ts) - S.pos) <= maxR ? 1 : 0;
 }
 
+bool CityHallAttackable(cGameData* hall) {
+    uint32_t pid = hall ? uint32_t(hall->mPoliticalID) : uint32_t(-1);
+    return game::IsCityHall(hall) && S.purpose == kVehicleMilitary && pid != uint32_t(-1) &&
+           pid != game::PlayerPoliticalID() && game::CityDefenseless(game::CityOf(hall));
+}
+
 void Fire(cGameData* target) {
     if (!target || !S.veh)
         return;
+    if (game::IsCityHall(target)) {
+        EnsureSelected(true);
+        S.ownAct = true;
+        game::AttackCity(S.veh, game::CityOf(target));
+        S.ownAct = false;
+        S.orderTarget = game::CurrentOrderTarget(S.veh);
+        S.fireTarget = target;
+        S.lastFireTick = Now();
+        S.dock = nullptr;
+        return;
+    }
     if (IsClaimTarget(target)) {
         if (game::StartClaim(target, S.veh)) {
             S.fireTarget = target;
@@ -567,7 +586,7 @@ void UpdateAim() {
     bool nativeFresh = Now() - S.nativeCursorTick < 300;
     S.hoverValid = S.hover && (nativeFresh ? IsActionCursor(S.nativeCursor) : TypeValid(S.hover));
     if (S.hover && game::IsCityHall(S.hover))
-        S.hoverValid = false;
+        S.hoverValid = CityHallAttackable(S.hover);
 
     if (S.loco == kVehicleAir && S.firing) {
         if (!Down(VK_LBUTTON) || !game::GameHasFocus()) {

@@ -170,7 +170,7 @@ vm::V3 FromSdk(const Math::Vector3& v) {
 bool terrainCursorOk = false, viewManagerOk = false, cursorOk = false, rangeOk = false, audioOk = false,
      minimapOk = false, rolloverOk = false, soundOk = false, listenerHookOk = false, minimapCameraOk = false,
      tribeOk = false, shadowOk = false, orderHookOk = false, claimOk = false, stanceOk = false, vehiclesOk = false,
-     cinematicOk = false;
+     cinematicOk = false, cityAttackOk = false;
 }
 
 bool CursorHookUsable() {
@@ -283,6 +283,10 @@ bool Verify() {
     rolloverOk = Bytes(0xcf4f35, "8986e4000000") && Bytes(0xe35796, "8b4b1089b1a8000000") &&
                  Bytes(raw::RolloverRootWindow, "8b41486a015083c10ce89284feffc3cc") &&
                  Slot(raw::CursorAttachmentVtable, 0x10, 0xe35320);
+    cityAttackOk = orderHookOk && Bytes(0xbd9d00, "53568bb140030000578bb94403000033") &&
+                   Bytes(0xbd9cc0, "53568bb154030000578bb95803000033") &&
+                   Bytes(0xc9efc0, "8b4424048981280d00008981240d0000") && Bytes(0xdcd3ef, "8b471033f683e802") &&
+                   Bytes(0xdce930, "6832229bee");
     cinematicOk = uintptr_t(GetAddress(Simulator::cCinematicManager, Get)) == Va<uintptr_t>(0xb3d5d0) &&
                   Bytes(0xe35341, "8b402c83f801740983f802");
     soundOk = Bytes(raw::NewAudioTrack, "558bec83ec08e815a35e008945fc837d") &&
@@ -836,6 +840,32 @@ cVehicle* SelectedPlayerVehicle() {
 
 bool IsCityHall(cGameData* object) {
     return object && Cast(object, 0x1007AE63);
+}
+
+cCity* CityOf(cGameData* object) {
+    auto* sp = object ? static_cast<cSpatialObject*>(Cast(object, 0x1186577)) : nullptr;
+    auto* pm = Planet();
+    if (!sp || !pm)
+        return nullptr;
+    Math::Vector3 v = sp->mPosition;
+    return Sdk<cCity*(__thiscall*)(cPlanetModel*, const Math::Vector3*)>(
+        GetAddress(Simulator::cPlanetModel, GetNearestCity))(pm, &v);
+}
+
+bool CityDefenseless(cCity* city) {
+    if (!cityAttackOk || !city || city->cGameData::mbIsDestroyed)
+        return false;
+    int buildings = Va<int(__thiscall*)(cCity*)>(0xbd9d00)(city);
+    int turrets = Va<int(__thiscall*)(cCity*)>(0xbd9cc0)(city);
+    return buildings < 2 && turrets < 1;
+}
+
+bool AttackCity(cVehicle* v, cCity* city) {
+    if (!cityAttackOk || !v || !city || !VehicleAlive(v))
+        return false;
+    Va<void(__thiscall*)(cVehicle*, cGameData*, int, int)>(raw::AddOrder)(v, city, 2, 1);
+    Va<void(__thiscall*)(cVehicle*, int)>(0xc9efc0)(v, 0);
+    return CurrentOrderTarget(v) == city;
 }
 
 bool CinematicPlaying() {
