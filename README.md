@@ -5,7 +5,7 @@ Third-person control of your own vehicles in the **Civilization stage** of *Spor
 your land vehicles, ships or aircraft and drive it yourself: the camera sits behind it, WASD drives, the mouse aims
 and fires. Everything the vehicle does still goes through the game's own rules, ranges and cursors.
 
-Current version: **1.0.0**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
+Current version: **1.0.1**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
 
 ## Controls
 
@@ -24,7 +24,7 @@ Current version: **1.0.0**. Download `CivDrive.sporemod` from the [Releases](../
 | Claim a free spice source | The claim radius is read from the game's own claim behaviour (**24 m** from the source's centre) and drawn around the hovered source. Click inside it and the derrick starts at once; the vehicle stays where it is |
 | Another nation's spice derrick | Attack, convert or buy it like any other target, from the vehicle's native range |
 | Raid a tribe | Nothing to aim at: **drive into a tribe hut**. The game gets the raid order at that moment (let go of WASD on the hut and the game drives the last metres) |
-| Capture a city | When an enemy city has no buildings left, hover it: the game's own capture button (the house) appears. Press it and let go of WASD; the game drives the vehicle to the city hall |
+| Capture a city | Destroy the city's buildings and turrets first (click them as usual). Then, with a military vehicle, hover the enemy city hall: the attack cursor appears. A click gives the game's own city attack order, the one the AI uses: the vehicle fires at the city hall from its native weapon range, and when the hall falls the city is captured, with the game's own cinematic. While buildings or turrets are left, a click on the city hall does nothing, as in normal play |
 | Switch vehicles | **Double-click another of your vehicles** on the planet or in the list: the camera flies over and the control moves to it. A click on your own vehicle is never an attack |
 | Back to the strategic view | **Double-tap Shift**. The view flies back to the strategic camera, which stays where it was |
 | Game menu | **Esc** ends the control at once (the strategic camera jumps over the vehicle) and opens the game's menu |
@@ -56,8 +56,11 @@ smaller **yellow copy** of it (the game's own icon, recoloured), pointing where 
   vehicle, so engines, weapons and city alarms nearby are heard. Shadows are computed around the vehicle, even when
   the strategic camera is far away.
 - While you drive, the game does not move the vehicle itself (even the attack AI cannot drag it away), and after you
-  leave it stays where you left it. The city pop-up with its action choices is hidden, except over an enemy city
-  with no buildings left, where its capture button is shown as in normal play.
+  leave it stays where you left it. The city pop-up is hidden, except over a city hall, where it shows the city's
+  information as in normal play.
+- **Cinematics and the city editor keep working.** When the game plays a cinematic (a city capture, for example),
+  opens the city editor or switches to another camera, it gets the camera, the sound and the controls back for that
+  time, and the vehicle waits. Afterwards the view flies back behind the vehicle and you carry on driving.
 - Pausing the game stops your vehicle too. Minimising the game does not end the control.
 
 ## Installation

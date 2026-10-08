@@ -1,5 +1,5 @@
 
-CivDrive 1.0.0 is licensed under GPL-3.0-or-later.
+CivDrive 1.0.1 is licensed under GPL-3.0-or-later.
 
 Spore ModAPI SDK: Copyright Eric Mor and contributors; GPL-3.0-or-later.
 CivDrive uses its headers and links SporeModAPI.lib; src/math/VMath.hpp follows the quaternion and matrix
