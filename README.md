@@ -1,7 +1,7 @@
 
 # CivDrive
 
-Third-person control of your own vehicles in the **Civilization stage** of *Spore Galactic Adventures*. Take any of
+Third-person control of your own vehicles in the **Civilization stage** of *Spore*. Take any of
 your land vehicles, ships or aircraft and drive it yourself: the camera sits behind it, WASD drives, the mouse aims
 and fires. Everything the vehicle does still goes through the game's own rules, ranges and cursors.
 
