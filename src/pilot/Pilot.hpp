@@ -23,7 +23,7 @@ void OnCivMessage(uint32_t id, void* msg);
 bool BlockVehicleWrite(const void* spatial);
 bool VelocityFor(const void* locomotive, float out[3]);
 uint32_t FilterCursor(uint32_t id);
-bool RefuseOrder(const void* vehicle, const void* target, uint32_t callerVa);
+bool RefuseOrder(const void* vehicle, const void* target, int kind, uint32_t callerVa);
 bool RefuseCombatTarget(const void* combatant, const void* target);
 bool ListenerOverride(int index, const float* gamePos, const float* gameRot, float pos[3], float rot[9],
                       bool& replaceRot);

@@ -157,6 +157,8 @@ void RestoreCursor() {
 uint32_t WantedCursor() {
     if (S.orbit && (S.orbitVk == VK_MBUTTON || S.orbitMoved > kClickSlop))
         return kCursorNone;
+    if (game::PieMenuOpen() || S.purpose == kVehicleEconomic)
+        return 0;
     if (S.hoverValid && game::IsCityHall(S.hover))
         return kCursorAttack;
     if (S.hoverValid)
@@ -488,9 +490,33 @@ bool IsClaimTarget(cGameData* t) {
     return game::Cast(t, cCommodityNode::TYPE) && t->mPoliticalID == uint32_t(-1);
 }
 
+float TargetRingRadius(cSpatialObject* target, bool claim) {
+    return claim ? game::ClaimRadius() : vm::Clamp(game::BoundingRadius(target) * 1.15f, 2.5f, 45.0f);
+}
+
+int EconomicSpiceRange(cGameData* target, const V3& position) {
+    if (!target || target->mbIsDestroyed || !game::Cast(target, cCommodityNode::TYPE))
+        return -1;
+    bool claim = IsClaimTarget(target);
+    if (!claim && !game::EconomicTarget(S.veh, target))
+        return -1;
+    auto* spatial = static_cast<cSpatialObject*>(game::Cast(target, 0x1186577));
+    if (!spatial)
+        return -1;
+    if (claim)
+        return vm::Len(game::Position(spatial) - position) <= game::ClaimRadius() ? 1 : 0;
+    return vm::InsideGroundRing(position, game::ToSurface(game::Position(spatial)), TargetRingRadius(spatial, false))
+               ? 1
+               : 0;
+}
+
 int InActionRange(cGameData* t) {
     if (!t)
         return -1;
+    // Economic vehicles have no attack range. Only spice targets get a
+    // distance result; cities and every other object keep a neutral ring.
+    if (S.purpose == kVehicleEconomic)
+        return EconomicSpiceRange(t, S.pos);
     auto* ts = static_cast<cSpatialObject*>(game::Cast(t, 0x1186577));
     if (IsClaimTarget(t)) {
         if (!ts)
@@ -508,6 +534,12 @@ int InActionRange(cGameData* t) {
     return vm::Len(game::Position(ts) - S.pos) <= maxR ? 1 : 0;
 }
 
+uint32_t ActionRangeColor(cGameData* target) {
+    const uint32_t neutral = 0x90D8ECFF, inside = 0xD860FF7A, outside = 0xE0FF9A3C;
+    int in = InActionRange(target);
+    return in < 0 ? neutral : (in ? inside : outside);
+}
+
 bool CityHallAttackable(cGameData* hall) {
     uint32_t pid = hall ? uint32_t(hall->mPoliticalID) : uint32_t(-1);
     return game::IsCityHall(hall) && S.purpose == kVehicleMilitary && pid != uint32_t(-1) &&
@@ -517,6 +549,13 @@ bool CityHallAttackable(cGameData* hall) {
 void Fire(cGameData* target) {
     if (!target || !S.veh)
         return;
+    if (game::EconomicTarget(S.veh, target)) {
+        EnsureSelected(true);
+        S.ownAct = true;
+        game::Act(S.veh, target, S.actKey);
+        S.ownAct = false;
+        return;
+    }
     if (game::IsCityHall(target)) {
         EnsureSelected(true);
         S.ownAct = true;
@@ -547,7 +586,11 @@ void Fire(cGameData* target) {
 }
 
 bool TryFire(cGameData* target) {
-    if (InActionRange(target) == 0) {
+    if (S.purpose == kVehicleEconomic && !IsClaimTarget(target) && !game::EconomicTarget(S.veh, target))
+        return false;
+    int range = InActionRange(target);
+    bool spice = S.purpose == kVehicleEconomic && target && game::Cast(target, cCommodityNode::TYPE);
+    if (range == 0 || (spice && range != 1)) {
         if (S.refusedTarget != target) {
             game::PlayRefusal();
             S.refusedTarget = target;
@@ -562,7 +605,7 @@ bool TryFire(cGameData* target) {
 void AttackPress() {
     cGameData* target = S.hoverValid ? S.hover : nullptr;
     S.refusedTarget = nullptr;
-    if (S.loco == kVehicleAir) {
+    if (S.loco == kVehicleAir && S.purpose != kVehicleEconomic) {
         S.firing = true;
         if (target)
             TryFire(target);
@@ -581,7 +624,7 @@ void AttackRelease() {
 }
 
 void UpdateAim() {
-    bool overUI = game::MouseOverUI() && !game::OverCityRollover();
+    bool overUI = game::PieMenuOpen() || (game::MouseOverUI() && !game::OverCityRollover());
     S.hover = overUI ? nullptr : game::PickHovered();
     if (S.hover && game::AsVehicle(S.hover) == S.veh)
         S.hover = nullptr;
@@ -589,6 +632,8 @@ void UpdateAim() {
     S.hoverValid = S.hover && (nativeFresh ? IsActionCursor(S.nativeCursor) : TypeValid(S.hover));
     if (S.hover && game::IsCityHall(S.hover))
         S.hoverValid = CityHallAttackable(S.hover);
+    if (game::EconomicTarget(S.veh, S.hover))
+        S.hoverValid = game::EconomicMenuUsable();
 
     if (S.loco == kVehicleAir && S.firing) {
         if (!Down(VK_LBUTTON) || !game::GameHasFocus()) {
@@ -655,11 +700,41 @@ void UpdateRaid() {
     }
 }
 
+bool MovementKey(int vk) {
+    return vk == 'W' || vk == 'A' || vk == 'S' || vk == 'D' || vk == VK_UP || vk == VK_DOWN || vk == VK_LEFT ||
+           vk == VK_RIGHT;
+}
+
+void CancelTradeForManualDrive() {
+    if (!Piloting() || S.cinematic || !S.veh || !S.sp || S.purpose != kVehicleEconomic || !game::GameHasFocus())
+        return;
+    int kind = game::CurrentOrderKind(S.veh);
+    if (kind != game::kOrderTrade && kind != game::kOrderProposeTrade)
+        return;
+    // Manual driving cancels this vehicle's trade task, including permission
+    // for its native continuation. Releasing the key must not resume it.
+    S.uiOrderSet = false;
+    S.uiOrder = nullptr;
+    S.rolloverClickTick = 0;
+    S.orderTarget = nullptr;
+    S.fireTarget = nullptr;
+    S.firing = false;
+    game::ClearOrders(S.veh);
+    S.pos = game::Position(S.sp);
+    S.speed = 0;
+    S.vel = {0, 0, 0};
+    S.raidDocking = false;
+    S.lock = S.sp;
+    game::StopMovement(S.sp);
+}
+
 bool RaidDocking() {
     bool want = false;
     if (S.mode == Mode::Active) {
         bool hands = game::GameHasFocus() && (Down('W') || Down('A') || Down('S') || Down('D') || Down(VK_UP) ||
                                               Down(VK_DOWN) || Down(VK_LEFT) || Down(VK_RIGHT));
+        if (hands)
+            CancelTradeForManualDrive();
         cGameData* live = game::CurrentOrderTarget(S.veh);
         if (S.uiOrderSet && (!live || (S.uiOrder && live != S.uiOrder))) {
             S.uiOrderSet = false;
@@ -715,9 +790,7 @@ void UpdateOverlay() {
     bool claim = S.hoverValid && IsClaimTarget(S.hover);
     auto* ts = S.hoverValid ? static_cast<cSpatialObject*>(game::Cast(S.hover, 0x1186577)) : nullptr;
 
-    const uint32_t neutral = 0x90D8ECFF, inside = 0xD860FF7A, outside = 0xE0FF9A3C;
-    int in = S.hoverValid ? InActionRange(S.hover) : -1;
-    uint32_t status = in < 0 ? neutral : (in ? inside : outside);
+    uint32_t status = ActionRangeColor(S.hoverValid ? S.hover : nullptr);
 
     if (weapon) {
         V3 groundPt = game::ToSurface(S.pos);
@@ -745,7 +818,7 @@ void UpdateOverlay() {
     }
 
     if (ts) {
-        float r = claim ? game::ClaimRadius() : vm::Clamp(game::BoundingRadius(ts) * 1.15f, 2.5f, 45.0f);
+        float r = TargetRingRadius(ts, claim);
         V3 tp = game::Position(ts), ground = game::ToSurface(tp);
         bool airborne = !claim && vm::Len(tp) - vm::Len(ground) > game::BoundingRadius(ts) + 3.0f;
         if (airborne)
@@ -1082,6 +1155,8 @@ bool OnKeyDown(int vk) {
         return false;
     }
     if (Piloting() && ControlledKey(vk)) {
+        if (MovementKey(vk))
+            CancelTradeForManualDrive();
         if (vk >= 0 && vk < 256)
             S.swallowKey[vk] = true;
         return true;
@@ -1122,6 +1197,13 @@ bool OnMouseDown(int button, float x, float y) {
     if (S.cinematic)
         return false;
     if (Piloting()) {
+        // A pie menu handles clicks outside its buttons too (to dismiss it).
+        // Pass both halves of UI clicks through, without also firing at the world.
+        if (game::PieMenuOpen() || game::MouseOverUI()) {
+            if (idx >= 0 && idx < 8)
+                S.swallowBtn[idx] = false;
+            return false;
+        }
         if (idx >= 0 && idx < 8)
             S.swallowBtn[idx] = true;
         if (button == kMouseMiddle || button == kMouseRight) {
@@ -1177,8 +1259,12 @@ bool OnMouseUp(int button) {
 }
 
 bool OnMouseMove(uint32_t& state) {
-    if (Piloting() && !S.cinematic)
-        state &= ~uint32_t(8 | 16 | 32);
+    if (Piloting() && !S.cinematic) {
+        // Keep native button state for UI drags, even after leaving the widget.
+        for (int i = 0; i < 3; ++i)
+            if (S.swallowBtn[i])
+                state &= ~uint32_t(8 << i);
+    }
     return false;
 }
 
@@ -1380,10 +1466,29 @@ bool RefuseCombatTarget(const void* combatant, const void* target) {
     return true;
 }
 
-bool RefuseOrder(const void* vehicle, const void* target, uint32_t va) {
-    if (!Piloting() || !S.veh || vehicle != S.veh || cfg::Get().autonomousFire)
+bool RefuseOrder(const void* vehicle, const void* target, int kind, uint32_t va) {
+    if (!Piloting() || !S.veh || vehicle != S.veh)
+        return false;
+    if (S.purpose == kVehicleEconomic && kind == game::kOrderBribeNode) {
+        auto* node = static_cast<cGameData*>(const_cast<void*>(target));
+        // The vehicle may have left the green zone after opening the menu.
+        // Check its live position before the native bribe order can be added.
+        if (!S.sp || !game::EconomicTarget(S.veh, node) ||
+            EconomicSpiceRange(node, game::Position(S.sp)) != 1) {
+            game::PlayRefusal();
+            return true;
+        }
+    }
+    if (cfg::Get().autonomousFire)
         return false;
     if (S.ownAct)
+        return false;
+    // The native proposal behaviour replaces order 9 with delivery order 5
+    // after acceptance (or if the route already exists). It continues the
+    // player's order; permission expires when that proposal is cleared/replaced.
+    if (S.purpose == kVehicleEconomic && S.uiOrderSet && target && target == S.uiOrder &&
+        kind == game::kOrderTrade && game::IsTradeContinuationCaller(va) &&
+        game::CurrentOrderTarget(S.veh) == target && game::CurrentOrderKind(S.veh) == game::kOrderProposeTrade)
         return false;
     if ((va >= 0xcf2000 && va < 0xcf8000) || (S.rolloverClickTick && Now() - S.rolloverClickTick < 600)) {
         S.uiOrderSet = true;

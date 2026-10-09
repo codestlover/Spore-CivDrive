@@ -15,6 +15,7 @@
 #include <Spore/Simulator/SubSystem/GameNounManager.h>
 #include <Spore/Simulator/SubSystem/GameModeManager.h>
 #include <Spore/Simulator/SubSystem/GameViewManager.h>
+#include <Spore/Simulator/SubSystem/GameInputManager.h>
 #include <Spore/Simulator/SubSystem/GameTimeManager.h>
 #include <Spore/Simulator/SubSystem/PlanetModel.h>
 #include <Spore/Simulator/SubSystem/CinematicManager.h>
@@ -152,6 +153,10 @@ UTFWin::IWindowManager* Windows() {
     return Sdk<UTFWin::IWindowManager* (*)()>(GetAddress(UTFWin::IWindowManager, Get))();
 }
 
+cGameInputManager* Input() {
+    return Sdk<cGameInputManager* (*)()>(GetAddress(Simulator::cGameInputManager, Get))();
+}
+
 void* CursorMgr() {
     return Sdk<void* (*)()>(GetAddress(UTFWin::cCursorManager, Get))();
 }
@@ -171,7 +176,10 @@ vm::V3 FromSdk(const Math::Vector3& v) {
 bool terrainCursorOk = false, viewManagerOk = false, cursorOk = false, rangeOk = false, audioOk = false,
      minimapOk = false, rolloverOk = false, soundOk = false, listenerHookOk = false, minimapCameraOk = false,
      tribeOk = false, shadowOk = false, orderHookOk = false, claimOk = false, stanceOk = false, vehiclesOk = false,
-     cinematicOk = false, cityAttackOk = false, cityEditorOk = false;
+     cinematicOk = false, cityAttackOk = false, cityEditorOk = false, economicMenuOk = false,
+     tradeContinuationOk = false;
+
+const void* economicCityMenu = nullptr;
 }
 
 bool CursorHookUsable() {
@@ -184,6 +192,26 @@ bool ListenerHookUsable() {
 
 bool OrderHookUsable() {
     return orderHookOk;
+}
+
+bool IsTradeContinuationCaller(uint32_t callerVa) {
+    return tradeContinuationOk &&
+           (callerVa == raw::TradeAcceptedOrder + 5 || callerVa == raw::TradeExistingOrder + 5);
+}
+
+bool EconomicMenuUsable() {
+    return economicMenuOk;
+}
+
+bool AllowPieMenuItem(const void* menu, uint32_t command) {
+    // Only narrow the menu being built for our economic vehicle. The native
+    // builders still supply all labels, prices and disabled states.
+    return !economicCityMenu || menu != economicCityMenu || command == 0x37e95bb || command == 0x37e95bc ||
+           command == 0x37e95bd;
+}
+
+bool PieMenuOpen() {
+    return economicMenuOk && *Va<void**>(raw::ActivePieMenu);
 }
 
 bool StanceUsable() {
@@ -281,6 +309,9 @@ bool Verify() {
     vehiclesOk = Bytes(0xae7330, "68e86d8c016840e4b100685072ae0068d0d3d30068907ecd00");
     orderHookOk = ForeignOrBytes(raw::AddOrder, "83ec1855578bf9e8b4b1ffff") &&
                   ForeignOrBytes(raw::AddOrderAt, "83ec1856578bf1e814e8ffff");
+    tradeContinuationOk = orderHookOk && Bytes(0xdca213, "6a006a05568bcbe8811feeff") &&
+                          Bytes(0xdca43f, "8b4c243c6a006a0556e8531deeff") &&
+                          Bytes(0xcac1b4, "8b4c2428394810") && Bytes(0xcac242, "8946108b9708050000");
     rolloverOk = Bytes(0xcf4f35, "8986e4000000") && Bytes(0xe35796, "8b4b1089b1a8000000") &&
                  Bytes(raw::RolloverRootWindow, "8b41486a015083c10ce89284feffc3cc") &&
                  Slot(raw::CursorAttachmentVtable, 0x10, 0xe35320);
@@ -299,7 +330,16 @@ bool Verify() {
     if (uintptr_t(GetAddress(App::cCameraManager, Update)) != Va<uintptr_t>(0x7c6440))
         ok = false;
     ok &= Bytes(raw::ActOnTarget, "83ec3c53558b6c2448565733ff894c24");
-    ok &= Bytes(raw::TradeOnSpice, "83ec1c53578bd933ff80bb3501000000");
+    ok &= Bytes(raw::ShowEconomicMenu, "83ec1c53578bd933ff80bb3501000000");
+    economicMenuOk = ForeignOrBytes(raw::AddPieMenuItem, "83ec1856b8ac7b66018bf18b4c2420") &&
+                     uintptr_t(GetAddress(Simulator::cGameInputManager, Get)) == Va<uintptr_t>(0xb3d350) &&
+                     Slot(raw::GameInputManagerVtable, 0x30, 0xb1c480) &&
+                     Slot(raw::GameInputManagerVtable, 0x2c, 0xb1ba80) &&
+                     Bytes(0xb1c480, "568bf18d4660508d4e28e801fcffff") &&
+                     Bytes(0xce8c69, "8b44243483f8060f848400000083f80b") &&
+                     Bytes(0xce8d04, "6863ae07108bcdffd08bf8") && Bytes(0xce8c89, "685fdf03048bcdffd28bf0") &&
+                     Bytes(0xce8ddf, "8b4b5ce8f946e9ff") && Bytes(0xce8df1, "89bb0c010000") &&
+                     Bytes(0xb7c8e0, "8b0d7c816801568bf1") && Bytes(0xb7c932, "c7057c81680100000000");
     ok &= Bytes(raw::ClearOrders, "56578bf98b8ff00a00006a0068f64f00");
     ok &= Bytes(raw::GameCivGet, "a1c8d26901c3");
     ok &= Bytes(raw::PlanetCameraGet, "a1ccea6701c3");
@@ -480,6 +520,33 @@ void SelectOnly(cSpatialObject* s) {
     NotifyMessage(kMsgSelectionChanged);
 }
 
+bool EconomicTarget(cVehicle* v, cGameData* target) {
+    return v && target && !target->mbIsDestroyed && v->mPurpose == kVehicleEconomic &&
+           target->mPoliticalID != uint32_t(-1) && target->mPoliticalID != PlayerPoliticalID() &&
+           (IsCityHall(target) || Cast(target, cCommodityNode::TYPE));
+}
+
+namespace {
+bool OpenEconomicMenu(cGameData* target, const void* cityMenu) {
+    auto* input = Input();
+    auto* sp = static_cast<cSpatialObject*>(Cast(target, 0x1186577));
+    if (!economicMenuOk || !input || !sp || !HasSlot(input, 0x30, 0xb1c480))
+        return false;
+    // UIMachineCityCiv accepts MenuItem only in CISMenuDisplayed. Showing the
+    // pie directly skips that transition and leaves its buttons without actions.
+    const int flags = int(UIStateMachineObjectFlags::NPCOwned) | int(UIStateMachineObjectFlags::IsNotSelected) |
+                      int(UIStateMachineObjectFlags::SomeObjectsAreSelected) |
+                      int(UIStateMachineObjectFlags::ObjectIsNotShowingMenu);
+    const void* previousMenu = economicCityMenu;
+    economicCityMenu = cityMenu;
+    bool result = input->ProcessTransition(UIStateMachineEvent::MouseDown, UIStateMachineEventKey::LEFT,
+                                           static_cast<ISimulatorSerializable*>(target), sp->mPosition, flags,
+                                           int(UIStateMachineKeyMod::NONE));
+    economicCityMenu = previousMenu;
+    return result && PieMenuOpen();
+}
+}
+
 bool Act(cVehicle* v, cGameData* target, int key) {
     if (!v || !target)
         return false;
@@ -489,10 +556,14 @@ bool Act(cVehicle* v, cGameData* target, int key) {
     void* controller = *reinterpret_cast<void**>(static_cast<char*>(civ) + raw::GameCivUiController);
     if (!controller)
         return false;
-    auto* node = static_cast<cGameData*>(Cast(target, cCommodityNode::TYPE));
-    if (node && node->mPoliticalID != uint32_t(-1) && v->mPurpose == kVehicleEconomic) {
-        Va<int(__thiscall*)(void*, cGameData*, int)>(raw::TradeOnSpice)(controller, target, 0xb);
-        return true;
+    if (EconomicTarget(v, target)) {
+        bool city = IsCityHall(target);
+        if (!economicMenuOk || (city && !CityOf(target)))
+            return false;
+        auto* menu = city ? *reinterpret_cast<void**>(static_cast<char*>(controller) + 0x5c) : nullptr;
+        if (city && !menu)
+            return false;
+        return OpenEconomicMenu(target, menu);
     }
     Va<int(__thiscall*)(void*, cGameData*, int)>(raw::ActOnTarget)(controller, target, key);
     return true;
@@ -510,6 +581,17 @@ cGameData* CurrentOrderTarget(cVehicle* v) {
     if (!begin || begin >= end)
         return nullptr;
     return *reinterpret_cast<cGameData**>(begin);
+}
+
+int CurrentOrderKind(cVehicle* v) {
+    if (!v || !tradeContinuationOk)
+        return -1;
+    auto* raw = reinterpret_cast<char*>(v);
+    auto* begin = *reinterpret_cast<char**>(raw + 0xb68);
+    auto* end = *reinterpret_cast<char**>(raw + 0xb6c);
+    if (!begin || begin >= end)
+        return -1;
+    return *reinterpret_cast<int*>(begin + 0x10);
 }
 
 int InWeaponRange(cVehicle* v, cGameData* target) {

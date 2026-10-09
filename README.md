@@ -5,7 +5,7 @@ Third-person control of your own vehicles in the **Civilization stage** of *Spor
 your land vehicles, ships or aircraft and drive it yourself: the camera sits behind it, WASD drives, the mouse aims
 and fires. Everything the vehicle does still goes through the game's own rules, ranges and cursors.
 
-Current version: **1.0.1**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
+Current version: **1.0.6**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
 
 ## Controls
 
@@ -22,7 +22,8 @@ Current version: **1.0.1**. Download `CivDrive.sporemod` from the [Releases](../
 | Out of range | A click on a target out of range plays the game's refusal sound and gives no order |
 | Stop the current attack | A short right click (without moving the mouse) |
 | Claim a free spice source | The claim radius is read from the game's own claim behaviour (**24 m** from the source's centre) and drawn around the hovered source. Click inside it and the derrick starts at once; the vehicle stays where it is |
-| Another nation's spice derrick | Attack, convert or buy it like any other target, from the vehicle's native range |
+| Another nation's spice derrick | Military and religious vehicles attack or convert it from their native range. With an economic vehicle, drive inside the derrick's green ring, click it, then click **Bribe the Workers** in the native menu |
+| Trade with or buy another nation's city | With an economic vehicle, click its **city hall**. The native menu offers only **Propose Trade Route / Trade With City** and **Buy City**, subject to the game's reachability, funds and trade progress rules. One click opens the menu for land, sea and air vehicles |
 | Raid a tribe | Nothing to aim at: **drive into a tribe hut**. The game gets the raid order at that moment (let go of WASD on the hut and the game drives the last metres) |
 | Capture a city | Destroy the city's buildings and turrets first (click them as usual). Then, with a military vehicle, hover the enemy city hall: the attack cursor appears. A click gives the game's own city attack order, the one the AI uses: the vehicle fires at the city hall from its native weapon range, and when the hall falls the city is captured, with the game's own cinematic. While buildings or turrets are left, a click on the city hall does nothing, as in normal play |
 | Switch vehicles | **Double-click another of your vehicles** on the planet or in the list: the camera flies over and the control moves to it. A click on your own vehicle is never an attack |
@@ -45,6 +46,17 @@ smaller **yellow copy** of it (the game's own icon, recoloured), pointing where 
   kind of vehicle: its stance (the red and blue buttons) has no effect, it does not return fire and does not shoot
   at enemies nearby. Any order or combat target the game gives it without your command is refused. It fires only
   on your click (aircraft only while the button is held).
+- **Economic vehicles can trade and buy targets while you drive.** Click a foreign spice derrick to bribe its
+  workers, or a foreign city hall for a menu with trade and purchase actions. The menu buttons work during piloting;
+  clicking a menu never also attacks the object behind it. For economic vehicles, only spice targets change the
+  range ring's color. A foreign derrick's ring is green inside and orange outside, using the same radius for drawing
+  and checking range. Opening its bribe menu and issuing the bribe order both require being inside the green zone;
+  driving away after opening the menu does not bypass that check. Cities, buildings and vehicles keep white rings
+  because economic vehicles cannot attack. City trade and purchase still use the game's native conditions.
+  Once you select an action, release WASD to let the vehicle complete its native order. After a city accepts a trade
+  proposal, the vehicle automatically starts deliveries; choosing **Trade With City** a second time is not required. Pressing **WASD or any arrow key** cancels that
+  vehicle's trade/proposal order and returns manual control immediately. Releasing the key does not resume
+  deliveries; select **Trade With City** again when you want to restart them. The trade agreement stays in place.
 - **Movement rules.** Land vehicles do not drive into cities (the walls and the gates and dock that stick out of
   them) or into the water (the nose of the vehicle is checked too, and long steps are checked in pieces). Ships stay
   in the water. At shores and walls the vehicle slides along the obstacle. Aircraft keep their height over the ground

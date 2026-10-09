@@ -27,6 +27,7 @@ using SetListenerFn = void(__thiscall*)(void*, int, const float*, const float*);
 using AddOrderFn = void(__thiscall*)(void*, void*, int, int);
 using AddOrderAtFn = void(__thiscall*)(void*, int, int, int, int);
 using SetTargetFn = void(__thiscall*)(void*, void*);
+using AddPieMenuItemFn = void(__thiscall*)(void*, const wchar_t*, uint32_t, uint32_t);
 
 KeyFn origKeyDown, origKeyUp;
 MouseBtnFn origMouseDown, origMouseUp;
@@ -42,6 +43,7 @@ SetListenerFn origSetListener;
 AddOrderFn origAddOrder;
 AddOrderAtFn origAddOrderAt;
 SetTargetFn origVehSetTarget;
+AddPieMenuItemFn origAddPieMenuItem;
 
 bool __fastcall HkKeyDown(void* self, void*, int vk, uint32_t mods) {
     if (pilot::OnKeyDown(vk))
@@ -139,13 +141,13 @@ void __fastcall HkSetListener(void* self, void*, int index, const float* pos, co
 }
 
 void __fastcall HkAddOrder(void* self, void*, void* target, int kind, int extra) {
-    if (pilot::RefuseOrder(self, target, game::GameCallerVa(static_cast<uintptr_t*>(_AddressOfReturnAddress()))))
+    if (pilot::RefuseOrder(self, target, kind, game::GameCallerVa(static_cast<uintptr_t*>(_AddressOfReturnAddress()))))
         return;
     origAddOrder(self, target, kind, extra);
 }
 
 void __fastcall HkAddOrderAt(void* self, void*, int a, int b, int c, int d) {
-    if (pilot::RefuseOrder(self, nullptr, game::GameCallerVa(static_cast<uintptr_t*>(_AddressOfReturnAddress()))))
+    if (pilot::RefuseOrder(self, nullptr, -1, game::GameCallerVa(static_cast<uintptr_t*>(_AddressOfReturnAddress()))))
         return;
     origAddOrderAt(self, a, b, c, d);
 }
@@ -154,6 +156,11 @@ void __fastcall HkVehSetTarget(void* self, void*, void* target) {
     if (pilot::RefuseCombatTarget(self, target))
         return;
     origVehSetTarget(self, target);
+}
+
+void __fastcall HkAddPieMenuItem(void* self, void*, const wchar_t* label, uint32_t command, uint32_t flags) {
+    if (game::AllowPieMenuItem(self, command))
+        origAddPieMenuItem(self, label, command, flags);
 }
 
 class AppListener final : public App::IUnmanagedMessageListener {
@@ -220,7 +227,7 @@ bool AttachAll(FnHook* hooks, size_t n) {
 bool Install() {
     if (!game::Verify())
         return false;
-    FnHook hooks[6];
+    FnHook hooks[7];
     size_t n = 0;
     hooks[n++] = {game::raw::SetVelocity, reinterpret_cast<void*>(&HkSetVelocity),
                   reinterpret_cast<void**>(&origSetVelocity), false};
@@ -235,6 +242,9 @@ bool Install() {
     if (game::ListenerHookUsable())
         hooks[n++] = {game::raw::SetListenerPosition, reinterpret_cast<void*>(&HkSetListener),
                       reinterpret_cast<void**>(&origSetListener), false};
+    if (game::EconomicMenuUsable())
+        hooks[n++] = {game::raw::AddPieMenuItem, reinterpret_cast<void*>(&HkAddPieMenuItem),
+                      reinterpret_cast<void**>(&origAddPieMenuItem), false};
     if (!AttachAll(hooks, n))
         return false;
     game::origSetVelocity = reinterpret_cast<void*>(origSetVelocity);

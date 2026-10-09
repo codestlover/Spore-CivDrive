@@ -64,6 +64,19 @@ inline V3 Flatten(const V3& v, const V3& n) {
     return v - n * Dot(v, n);
 }
 
+inline bool InsideGroundRing(const V3& point, const V3& center, float radius) {
+    if (!Finite(point) || !Finite(center) || !std::isfinite(radius) || radius < 0)
+        return false;
+    float length = Len(center);
+    if (length <= 1e-6f)
+        return false;
+    V3 up = center * (1.0f / length);
+    float along = Dot(point, up);
+    // GroundRing projects center + tangent * radius onto the planet. Compare
+    // the same angular footprint; model height must not turn an inside point red.
+    return along > 0 && Len(Flatten(point, up)) * length <= radius * along;
+}
+
 inline V3 Rotate(const V3& v, const V3& axis, float angle) {
     float c = std::cos(angle), s = std::sin(angle);
     return v * c + Cross(axis, v) * s + axis * (Dot(axis, v) * (1 - c));
