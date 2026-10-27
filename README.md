@@ -5,7 +5,7 @@ Third-person control of your own vehicles in the **Civilization stage** of *Spor
 your land vehicles, ships or aircraft and drive it yourself: the camera sits behind it, WASD drives, the mouse aims
 and fires. Everything the vehicle does still goes through the game's own rules, ranges and cursors.
 
-Current version: **1.0.6**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
+Current version: **1.0.13**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
 
 ## Controls
 
@@ -13,12 +13,14 @@ Current version: **1.0.6**. Download `CivDrive.sporemod` from the [Releases](../
 | --- | --- |
 | Take a vehicle | **Double-click** one of your vehicles on the planet or its icon in the vehicle list, or select it and **double-tap Shift** |
 | Drive, sail, fly | **W / S** forward and back, **A / D** turn (the arrow keys work too) |
-| Turn the camera | Hold the **mouse wheel** or the **right mouse button** and move the mouse. Moving down lowers the camera behind the vehicle and turns it up to the sky (up to about 72°), so aircraft overhead can be seen and attacked from land and sea |
+| Turn the camera | Hold the **mouse wheel** or the **right mouse button** and move the mouse. The cursor stays visible. Moving down lowers the camera behind the vehicle and turns it up to the sky (up to about 72°), so aircraft overhead can be seen and attacked from land and sea |
 | Zoom | Mouse wheel |
 | Aim | Hover a target: the game's own cursor appears (attack, spice claim or conversion, whichever the game would show) |
 | Weapon range | A ring on the ground shows the vehicle's native weapon range. Green: the hovered target is in range; orange: drive closer. Aircraft targets get their ring at their own height |
 | Attack with land and sea vehicles | **One left click** on the target. The vehicle opens fire once the target is within its native range |
-| Attack with aircraft (lasers) | **Hold the left button** to fire and release it to stop. While holding you can move the aim to another target |
+| Attack with military aircraft (lasers) | **Hold the left button** to fire and release it to stop. While holding you can move the aim to another target |
+| Religious vehicles (land, sea and air) | **One left click** selects a target and starts continuous faith attacks with the game's normal range and firing cycle. No holding or repeated clicks are needed. The attack continues after leaving manual control. Click another target to change it, or use a short right click to cancel. Living creatures, including land epics, are valid targets |
+| Convert a city | With a religious vehicle, click a foreign city hall. Conversion can begin while buildings and turrets remain. The selection ring surrounds the city hall; its range color uses the game's actual conversion target at the city gate |
 | Out of range | A click on a target out of range plays the game's refusal sound and gives no order |
 | Stop the current attack | A short right click (without moving the mouse) |
 | Claim a free spice source | The claim radius is read from the game's own claim behaviour (**24 m** from the source's centre) and drawn around the hovered source. Click inside it and the derrick starts at once; the vehicle stays where it is |
@@ -35,17 +37,27 @@ smaller **yellow copy** of it (the game's own icon, recoloured), pointing where 
 
 ## What it does
 
+- **Bones, rocks and vehicles.** Ground vehicles and ships collide with the meshes of large rock formations, and with
+  the rocks and bones scattered across the planet at the game's own obstacle radius for each of them. The driven
+  vehicle and every other unit collide by their real, turned bodies, so they stop where they touch and an aircraft
+  passes over ground units. If a vehicle is already inside an obstacle, it can move back out.
+- **Collisions have consequences.** Each touch gives both vehicles minor native collision damage, with the game's own
+  sparks of anti-tank fire and the grinding of a broken-down vehicle for as long as the bodies rub. The crew of the
+  driven vehicle calls "taking fire" over the radio. An AI-driven vehicle that was hit backs off to a safe distance
+  with a native move order, unless its empire is at war with you, dislikes you or is already attacking you. Your own
+  vehicles keep the order they are carrying out; only idle ones make way. An AI vehicle driving into yours stops at
+  the contact or slides along its side. A single bump counts for no one; ramming the same vehicle again and again,
+  or keeping it pinned for about five seconds, is an attack by your empire, with the game's diplomatic consequences.
+
 - **Entering and leaving** is a smooth camera flight of about a second with a custom pixel shader
   (`shaders/transition_ps.hlsl`): a radial zoom blur, chromatic aberration, speed lines, a flash and a vignette. A
   faint vignette stays while you drive. The game's own d3dx9 compiles the shader the first time you enter.
-- **Attacks are native.** A click goes to the same game function as a normal click with a selected vehicle, so
-  attacks on vehicles, cities and turrets, spice claims, conversion and trade follow the game's rules. **The ranges
-  are native too**: the weapon's own range check, the spice source's own claim radius, and the raid on arrival at
-  the hut, as the game does it.
-- **No auto-attack.** While you drive, the vehicle neither fires on its own nor takes orders from the AI, for every
-  kind of vehicle: its stance (the red and blue buttons) has no effect, it does not return fire and does not shoot
-  at enemies nearby. Any order or combat target the game gives it without your command is refused. It fires only
-  on your click (aircraft only while the button is held).
+- **Attacks are native.** Clicks issue the game's own orders, so attacks on vehicles, cities and turrets, spice
+  claims, conversion and trade follow the game's rules. **The ranges are native too**: the weapon's own range check,
+  the spice source's own claim radius, and the raid on arrival at the hut, as the game does it.
+- **You choose the targets.** While you drive, the vehicle does not acquire nearby enemies or retaliate without
+  your command. Religious vehicles keep attacking the target chosen with one click, including after returning to
+  the strategic view. Military aircraft fire only while the button is held. A short right click cancels the order.
 - **Economic vehicles can trade and buy targets while you drive.** Click a foreign spice derrick to bribe its
   workers, or a foreign city hall for a menu with trade and purchase actions. The menu buttons work during piloting;
   clicking a menu never also attacks the object behind it. For economic vehicles, only spice targets change the
@@ -58,15 +70,22 @@ smaller **yellow copy** of it (the game's own icon, recoloured), pointing where 
   vehicle's trade/proposal order and returns manual control immediately. Releasing the key does not resume
   deliveries; select **Trade With City** again when you want to restart them. The trade agreement stays in place.
 - **Movement rules.** Land vehicles do not drive into cities (the walls and the gates and dock that stick out of
-  them) or into the water (the nose of the vehicle is checked too, and long steps are checked in pieces). Ships stay
-  in the water. At shores and walls the vehicle slides along the obstacle. Aircraft keep their height over the ground
-  and the water. The speed is the vehicle's native speed.
+  them). Ships stay in the water. At shores and walls the vehicle slides along the obstacle. Aircraft keep their
+  height over the ground and the water. The speed is the vehicle's native speed.
+- **Land vehicles can drive into water.** They drive on along the sea floor, and the deeper the hull sinks, the
+  slower they go and the harder and more often the water damages them (native drowning damage), from about 1% of
+  their health per second at the wheels to about a quarter per second fully under. They can drive back out if they
+  make it in time. The crew reports the danger over the radio.
 - **It drives on the ground**: the vehicle tilts with the slope, its height is smoothed and a light suspension dips
   it when it speeds up or brakes and leans it in turns. Ships rock on the swell.
 - **Sound, animation and shadows as in normal play.** The game gets the vehicle's real velocity, so wheels and
-  tracks turn, the engine sounds and dust, wakes and contrails appear. The audio listeners follow the camera and the
-  vehicle, so engines, weapons and city alarms nearby are heard. Shadows are computed around the vehicle, even when
-  the strategic camera is far away.
+  tracks turn, the engine sounds and dust, wakes and contrails appear. Wheels, legs and tentacles follow the driven
+  speed, turn when the vehicle turns on the spot and hold their pose when it stops, instead of snapping back to the
+  first frame; they continue from there when it moves again. The audio listeners follow the camera and the vehicle,
+  so engines, weapons and city alarms nearby are heard. Shadows are computed around the vehicle, even when the
+  strategic camera is far away.
+- **The driven vehicle is marked in the vehicle list.** Its selection frame in the game's vehicle list glows red
+  instead of the native yellow while you drive it, and turns yellow again when you leave it.
 - While you drive, the game does not move the vehicle itself (even the attack AI cannot drag it away), and after you
   leave it stays where you left it. The city pop-up is hidden, except over a city hall, where it shows the city's
   information as in normal play.

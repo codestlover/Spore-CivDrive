@@ -1,5 +1,4 @@
 
-#include "core/Config.hpp"
 #include "game/Game.hpp"
 #include "pilot/Pilot.hpp"
 #include <Windows.h>
@@ -28,6 +27,7 @@ using AddOrderFn = void(__thiscall*)(void*, void*, int, int);
 using AddOrderAtFn = void(__thiscall*)(void*, int, int, int, int);
 using SetTargetFn = void(__thiscall*)(void*, void*);
 using AddPieMenuItemFn = void(__thiscall*)(void*, const wchar_t*, uint32_t, uint32_t);
+using MoveAnimationFn = void(__thiscall*)(void*, int, float, float, void*, void*);
 
 KeyFn origKeyDown, origKeyUp;
 MouseBtnFn origMouseDown, origMouseUp;
@@ -44,6 +44,7 @@ AddOrderFn origAddOrder;
 AddOrderAtFn origAddOrderAt;
 SetTargetFn origVehSetTarget;
 AddPieMenuItemFn origAddPieMenuItem;
+MoveAnimationFn origMoveAnimation;
 
 bool __fastcall HkKeyDown(void* self, void*, int vk, uint32_t mods) {
     if (pilot::OnKeyDown(vk))
@@ -95,6 +96,9 @@ bool __fastcall HkCivMsg(void* self, void*, uint32_t id, void* msg) {
 void __fastcall HkSetPos(void* self, void*, const void* v) {
     if (pilot::BlockVehicleWrite(self))
         return;
+    float allowed[3];
+    if (pilot::LimitOtherVehicleMove(self, static_cast<const float*>(v), allowed))
+        v = allowed;
     origSetPos(self, v);
 }
 
@@ -163,6 +167,19 @@ void __fastcall HkAddPieMenuItem(void* self, void*, const wchar_t* label, uint32
         origAddPieMenuItem(self, label, command, flags);
 }
 
+void __fastcall HkMoveAnimation(void* self, void*, int unused, float speed, float standard, void* world, void* model) {
+    float driven = 0;
+    if (pilot::MoveAnimationSpeed(self, model, standard, driven)) {
+        if (driven <= game::MoveAnimationThreshold()) {
+            if (*static_cast<const bool*>(self))
+                game::PauseMoveAnimation(world, model);
+            return;
+        }
+        speed = driven;
+    }
+    origMoveAnimation(self, unused, speed, standard, world, model);
+}
+
 class AppListener final : public App::IUnmanagedMessageListener {
     bool HandleMessage(uint32_t, void*) override {
         pilot::OnAppUpdate();
@@ -171,6 +188,15 @@ class AppListener final : public App::IUnmanagedMessageListener {
 };
 
 AppListener appListener;
+
+class RockListener final : public App::IUnmanagedMessageListener {
+    bool HandleMessage(uint32_t, void* msg) override {
+        game::OnPlanetRocks(msg);
+        return false;
+    }
+};
+
+RockListener rockListener;
 
 struct SlotPatch {
     uint32_t vtable, offset;
@@ -245,6 +271,9 @@ bool Install() {
     if (game::EconomicMenuUsable())
         hooks[n++] = {game::raw::AddPieMenuItem, reinterpret_cast<void*>(&HkAddPieMenuItem),
                       reinterpret_cast<void**>(&origAddPieMenuItem), false};
+    if (game::MoveAnimationUsable())
+        hooks[n++] = {game::raw::MoveAnimation, reinterpret_cast<void*>(&HkMoveAnimation),
+                      reinterpret_cast<void**>(&origMoveAnimation), false};
     if (!AttachAll(hooks, n))
         return false;
     game::origSetVelocity = reinterpret_cast<void*>(origSetVelocity);
@@ -291,8 +320,10 @@ void Init() {
     if (!Install())
         return;
     auto* messages = reinterpret_cast<App::IMessageManager* (*)()>(GetAddress(App::IMessageManager, Get))();
-    if (messages)
+    if (messages) {
         messages->AddUnmanagedListener(&appListener, game::kAppUpdate);
+        messages->AddUnmanagedListener(&rockListener, game::kMsgPlanetRocks);
+    }
 }
 }
 

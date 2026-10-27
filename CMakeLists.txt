@@ -126,7 +126,7 @@ add_library(civ_detours STATIC "${DETOURS_SRC}/detours.cpp" "${DETOURS_SRC}/modu
   "${DETOURS_SRC}/disasm.cpp" "${DETOURS_SRC}/image.cpp" "${DETOURS_SRC}/creatwth.cpp")
 target_compile_definitions(civ_detours PRIVATE WIN32_LEAN_AND_MEAN _WIN32_WINNT=0x0601)
 target_compile_options(civ_detours PRIVATE /W1 /EHsc)
-add_library(CivDrive SHARED src/core/Main.cpp src/core/Config.cpp src/game/Game.cpp src/pilot/Pilot.cpp
+add_library(CivDrive SHARED src/core/Main.cpp src/game/Game.cpp src/pilot/Pilot.cpp
   src/render/Effect.cpp src/render/Overlay.cpp)
 target_include_directories(CivDrive PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src" "${CMAKE_BINARY_DIR}/generated")
 target_include_directories(CivDrive SYSTEM PRIVATE "${DETOURS_SRC}" "${SPORE_SDK}")

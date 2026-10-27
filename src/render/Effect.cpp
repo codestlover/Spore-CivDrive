@@ -1,6 +1,5 @@
 
 #include "render/Effect.hpp"
-#include "core/Config.hpp"
 #include "render/Overlay.hpp"
 #include "game/Game.hpp"
 #include "game/SdkCompat.hpp"
@@ -307,14 +306,9 @@ void Ensure() {
 }
 
 void Set(float strength, float direction, float vignette) {
-    const auto& c = cfg::Get();
-    if (!c.shader) {
-        gStrength = gVignette = 0;
-        return;
-    }
     if (gStrength <= 0.001f && strength > 0.001f)
         gStart = GetTickCount();
-    gStrength = strength * c.shaderStrength;
+    gStrength = strength;
     gDirection = direction;
     gVignette = vignette;
 }

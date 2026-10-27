@@ -28,6 +28,9 @@ constexpr uint32_t GameCivVtable = 0x1478978;
 constexpr uint32_t CivUiListenerVtable = 0x14786fc;
 constexpr uint32_t VehicleSpatialVtable = 0x1474be8;
 constexpr uint32_t VehicleCombatantVtable = 0x1474ce8;
+constexpr uint32_t TerrainSphereVtable = 0x1490ba8;
+constexpr uint32_t PlanetTerrain = 0x24;
+constexpr uint32_t ModelWorldVtable = 0x140d7d8;
 constexpr uint32_t CameraManagerVtable = 0x1410718;
 constexpr uint32_t TerrainCursorVtable = 0x145ff70;
 constexpr uint32_t GameViewManagerVtable = 0x1460970;
@@ -54,6 +57,9 @@ constexpr uint32_t AddOrder = 0xcac1a0;
 constexpr uint32_t AddOrderAt = 0xcac280;
 constexpr uint32_t TradeAcceptedOrder = 0xdca448;
 constexpr uint32_t TradeExistingOrder = 0xdca21a;
+constexpr uint32_t StopVehicleWeapons = 0xc9f3e0;
+constexpr uint32_t ChooseCultureTarget = 0xbd8ec0;
+constexpr uint32_t ValidCombatTarget = 0xdc4db0;
 constexpr uint32_t GameCivPosse = 0xec;
 constexpr uint32_t PosseMinimap = 0xf0;
 constexpr uint32_t CursorAttachmentVtable = 0x1481b84;
@@ -61,7 +67,24 @@ constexpr uint32_t UiControllerAttachment = 0xe4;
 constexpr uint32_t RolloverRootWindow = 0x8281b0;
 constexpr uint32_t NewAudioTrack = 0x436350;
 constexpr uint32_t GameCivUiController = 0xe8;
+constexpr uint32_t VehicleTakeDamage = 0xcab6f0;
+constexpr uint32_t TakeFireVoices = 0x1474a7c;
+constexpr uint32_t StartOrders = 0xc9efc0;
+constexpr uint32_t IsAtWar = 0xd01f60;
+constexpr uint32_t RelationshipMap = 0xd01af0;
+constexpr uint32_t RelationshipData = 0xd01570;
+constexpr uint32_t MoveAnimation = 0xe949f0;
+constexpr uint32_t ContinuousMoveAnimation = 0xc9f080;
+constexpr uint32_t MoveAnimationThreshold = 0x14887d4;
+constexpr uint32_t PosseItemCivVtable = 0x1480920;
+constexpr uint32_t LayoutFindWindow = 0x810650;
+constexpr uint32_t PlayAudioAt = 0x571f80;
+constexpr uint32_t StopAudio = 0x572020;
+constexpr uint32_t WaterLevel = 0xb7e4e0;
 }
+
+constexpr uint32_t kCollisionEffect = 0x21ab381;
+constexpr uint32_t kScrapeSound = 0x46ca1c64;
 
 enum : uint32_t {
     kSlotKeyDown = 0x24,
@@ -76,18 +99,48 @@ enum : uint32_t {
 constexpr uint32_t kMsgPosseDoubleClick = 0x346048a;
 constexpr uint32_t kMsgActOnObject = 0x51dab6f;
 constexpr uint32_t kMsgSelectionChanged = 0x52f1544;
+constexpr uint32_t kMsgPlanetRocks = 0x31018b9;
 
 constexpr uint32_t kAppUpdate = 0x1EE100A;
 constexpr int kOrderTrade = 5;
 constexpr int kOrderProposeTrade = 9;
 constexpr int kOrderBribeNode = 11;
+constexpr int kOrderConvertCity = 3;
 
 bool Verify();
+bool SceneryStepBlocked(Simulator::cVehicle* controlled, const vm::V3& from, const vm::V3& to, bool transposed);
+void OnPlanetRocks(void* msg);
+bool HasOrders(Simulator::cVehicle* v);
+bool VehicleStepBlocked(Simulator::cVehicle* controlled, const vm::V3& from, const vm::V3& to, bool transposed,
+                        Simulator::cVehicle** hit);
+Simulator::cVehicle* ForeignVehicleStepBlocked(Simulator::cVehicle* controlled, const void* spatial, const vm::V3& to,
+                                               bool transposed, vm::V3& allowed);
+vm::V3 ContactPoint(Simulator::cVehicle* a, Simulator::cVehicle* b, bool transposed);
+bool VehicleDamage(Simulator::cVehicle* v, float fraction, uint32_t attacker, const vm::V3& at, bool lethal, int type);
+float WaterLevel();
+bool VehicleHeightSpan(Simulator::cVehicle* v, bool transposed, float& bottom, float& top);
+void PlayTakeFire(Simulator::cVehicle* v);
+bool HostileToPlayer(Simulator::cVehicle* v, Simulator::cVehicle* player);
+bool Retreat(Simulator::cVehicle* v, const vm::V3& threat, float distance);
+void CollisionSparks(const vm::V3& at, const vm::V3& away, float scale);
+void CollisionScrape(const void* key, const vm::V3& at);
+void UpdateCollisionSparks();
+bool MoveAnimationUsable();
+bool ContinuousMoveAnimation(Simulator::cVehicle* v);
+float MoveAnimationThreshold();
+const void* MoveAnimationOwner(const void* state);
+void PauseMoveAnimation(void* world, void* model);
+void TintVehicleListFrame(Simulator::cVehicle* v, uint32_t color);
 bool CursorHookUsable();
 bool ListenerHookUsable();
 bool OrderHookUsable();
 bool IsTradeContinuationCaller(uint32_t callerVa);
 bool StanceUsable();
+bool FaithWeaponReady(Simulator::cVehicle* v);
+bool AimFaithWeapon(Simulator::cVehicle* v, Simulator::cGameData* target);
+bool AttackFaith(Simulator::cVehicle* v, Simulator::cGameData* target);
+void StopFaithWeapon(Simulator::cVehicle* v);
+Simulator::cGameData* FaithTarget(Simulator::cVehicle* v, Simulator::cGameData* target);
 bool EconomicMenuUsable();
 bool AllowPieMenuItem(const void* menu, uint32_t command);
 bool PieMenuOpen();
@@ -157,6 +210,7 @@ Simulator::cVehicle* SelectedPlayerVehicle();
 bool IsCityHall(Simulator::cGameData* object);
 Simulator::cCity* CityOf(Simulator::cGameData* object);
 bool CityDefenseless(Simulator::cCity* city);
+bool CityConvertible(Simulator::cCity* city);
 bool AttackCity(Simulator::cVehicle* v, Simulator::cCity* city);
 bool CinematicPlaying();
 bool CityEditorOpen();

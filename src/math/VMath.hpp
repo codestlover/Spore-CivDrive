@@ -60,6 +60,62 @@ inline bool Finite(const V3& a) {
     return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z);
 }
 
+struct Box { V3 lower, upper; };
+
+inline bool ValidBox(const Box& box) {
+    return Finite(box.lower) && Finite(box.upper) && box.upper.x > box.lower.x + 1e-4f &&
+           box.upper.y > box.lower.y + 1e-4f && box.upper.z > box.lower.z + 1e-4f;
+}
+
+inline Box ShiftBox(const Box& box, const V3& shift) {
+    return {box.lower + shift, box.upper + shift};
+}
+
+inline Box SweptBox(const Box& box, const V3& step) {
+    return {box.lower + V3{std::fmin(0.0f,step.x), std::fmin(0.0f,step.y), std::fmin(0.0f,step.z)},
+            box.upper + V3{std::fmax(0.0f,step.x), std::fmax(0.0f,step.y), std::fmax(0.0f,step.z)}};
+}
+
+inline bool BoxesOverlap(const Box& a, const Box& b) {
+    return a.lower.x < b.upper.x && a.upper.x > b.lower.x && a.lower.y < b.upper.y &&
+           a.upper.y > b.lower.y && a.lower.z < b.upper.z && a.upper.z > b.lower.z;
+}
+
+inline bool MovementEntersBox(const Box& moving, const V3& step, const Box& obstacle) {
+    if (!ValidBox(moving) || !ValidBox(obstacle) || !Finite(step) || Dot(step,step) < 1e-12f)
+        return false;
+    V3 center = (moving.lower + moving.upper) * 0.5f;
+    V3 half = (moving.upper - moving.lower) * 0.5f;
+    V3 low = obstacle.lower - half, high = obstacle.upper + half;
+    float p[3]={center.x,center.y,center.z}, d[3]={step.x,step.y,step.z};
+    float lo[3]={low.x,low.y,low.z}, hi[3]={high.x,high.y,high.z};
+    if (BoxesOverlap(moving,obstacle)) {
+        float forward=1e30f, backward=1e30f;
+        for (int i=0;i<3;++i) {
+            if (std::fabs(d[i]) < 1e-7f)
+                continue;
+            float a=(lo[i]-p[i])/d[i], b=(hi[i]-p[i])/d[i];
+            forward=std::fmin(forward,std::fmax(a,b));
+            backward=std::fmin(backward,-std::fmin(a,b));
+        }
+        return forward > backward + 1e-5f;
+    }
+    float enter=0, leave=1;
+    for (int i=0;i<3;++i) {
+        if (std::fabs(d[i]) < 1e-7f) {
+            if (p[i] <= lo[i] || p[i] >= hi[i])
+                return false;
+            continue;
+        }
+        float a=(lo[i]-p[i])/d[i], b=(hi[i]-p[i])/d[i];
+        enter=std::fmax(enter,std::fmin(a,b));
+        leave=std::fmin(leave,std::fmax(a,b));
+        if (enter >= leave)
+            return false;
+    }
+    return enter < 1 && leave > 0;
+}
+
 inline V3 Flatten(const V3& v, const V3& n) {
     return v - n * Dot(v, n);
 }
@@ -72,8 +128,6 @@ inline bool InsideGroundRing(const V3& point, const V3& center, float radius) {
         return false;
     V3 up = center * (1.0f / length);
     float along = Dot(point, up);
-    // GroundRing projects center + tangent * radius onto the planet. Compare
-    // the same angular footprint; model height must not turn an inside point red.
     return along > 0 && Len(Flatten(point, up)) * length <= radius * along;
 }
 
@@ -244,6 +298,177 @@ inline float EaseInOutCubic(float t) {
 
 inline float Approach(float dt, float tau) {
     return tau <= 0 ? 1.0f : 1.0f - std::exp(-dt / tau);
+}
+
+struct OBox {
+    V3 center;
+    V3 axis[3];
+    float half[3] = {0, 0, 0};
+};
+
+inline OBox OrientedBox(const Box& local, const M3& rot, const V3& position) {
+    OBox b;
+    V3 c = (local.lower + local.upper) * 0.5f, h = (local.upper - local.lower) * 0.5f;
+    b.center = position + ToWorld(rot, c);
+    for (int i = 0; i < 3; ++i)
+        b.axis[i] = Norm(rot.Row(i));
+    b.half[0] = h.x;
+    b.half[1] = h.y;
+    b.half[2] = h.z;
+    return b;
+}
+
+inline bool ValidOBox(const OBox& b) {
+    if (!Finite(b.center))
+        return false;
+    for (int i = 0; i < 3; ++i)
+        if (!Finite(b.axis[i]) || !std::isfinite(b.half[i]) || b.half[i] <= 1e-4f)
+            return false;
+    return true;
+}
+
+inline OBox ShiftOBox(OBox b, const V3& shift) {
+    b.center = b.center + shift;
+    return b;
+}
+
+inline float OBoxRadius(const OBox& b) {
+    return std::sqrt(b.half[0] * b.half[0] + b.half[1] * b.half[1] + b.half[2] * b.half[2]);
+}
+
+inline Box OBoxBounds(const OBox& b) {
+    V3 e;
+    for (int i = 0; i < 3; ++i) {
+        const V3& a = b.axis[i];
+        e += V3{std::fabs(a.x), std::fabs(a.y), std::fabs(a.z)} * b.half[i];
+    }
+    return {b.center - e, b.center + e};
+}
+
+inline float OBoxPenetration(const OBox& a, const OBox& b) {
+    V3 axes[15];
+    int n = 0;
+    for (int i = 0; i < 3; ++i) {
+        axes[n++] = a.axis[i];
+        axes[n++] = b.axis[i];
+    }
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j) {
+            V3 c = Cross(a.axis[i], b.axis[j]);
+            float l = Len(c);
+            if (l > 1e-4f)
+                axes[n++] = c * (1.0f / l);
+        }
+    V3 d = b.center - a.center;
+    float depth = 1e30f;
+    for (int k = 0; k < n; ++k) {
+        float ra = 0, rb = 0;
+        for (int i = 0; i < 3; ++i) {
+            ra += std::fabs(Dot(a.axis[i], axes[k])) * a.half[i];
+            rb += std::fabs(Dot(b.axis[i], axes[k])) * b.half[i];
+        }
+        float overlap = ra + rb - std::fabs(Dot(d, axes[k]));
+        if (overlap <= 0)
+            return overlap;
+        depth = std::fmin(depth, overlap);
+    }
+    return depth;
+}
+
+inline bool MovementEntersOBox(const OBox& moving, const V3& step, const OBox& obstacle) {
+    if (!ValidOBox(moving) || !ValidOBox(obstacle) || !Finite(step) || Dot(step, step) < 1e-12f)
+        return false;
+    float start = OBoxPenetration(moving, obstacle);
+    if (start > 0)
+        return OBoxPenetration(ShiftOBox(moving, step), obstacle) > start + 1e-4f;
+    float thin = 1e30f;
+    for (int i = 0; i < 3; ++i)
+        thin = std::fmin(thin, std::fmin(moving.half[i], obstacle.half[i]));
+    int n = int(std::ceil(Len(step) / std::fmax(thin, 0.05f)));
+    n = n < 1 ? 1 : (n > 64 ? 64 : n);
+    for (int i = 1; i <= n; ++i)
+        if (OBoxPenetration(ShiftOBox(moving, step * (float(i) / float(n))), obstacle) > 0)
+            return true;
+    return false;
+}
+
+inline V3 AllowedStep(const OBox& moving, const V3& step, const OBox& obstacle, const V3& up) {
+    if (!MovementEntersOBox(moving, step, obstacle))
+        return step;
+    float lo = 0, hi = 1;
+    for (int i = 0; i < 12; ++i) {
+        float mid = (lo + hi) * 0.5f;
+        if (MovementEntersOBox(moving, step * mid, obstacle))
+            hi = mid;
+        else
+            lo = mid;
+    }
+    V3 done = step * lo, rest = Flatten(step - done, up);
+    OBox at = ShiftOBox(moving, done);
+    V3 best;
+    for (int i = 0; i < 6; ++i) {
+        V3 n = Norm(Flatten(i < 3 ? obstacle.axis[i] : moving.axis[i - 3], up), V3{});
+        if (Dot(n, n) < 0.5f)
+            continue;
+        V3 slide = rest - n * Dot(rest, n);
+        for (int k = 0; k < 2 && Dot(slide, slide) > Dot(best, best); ++k, slide = slide * 0.5f)
+            if (!MovementEntersOBox(at, slide, obstacle)) {
+                best = slide;
+                break;
+            }
+    }
+    return done + best;
+}
+
+inline V3 ClosestPoint(const OBox& b, const V3& p) {
+    V3 d = p - b.center, q = b.center;
+    for (int i = 0; i < 3; ++i)
+        q += b.axis[i] * Clamp(Dot(d, b.axis[i]), -b.half[i], b.half[i]);
+    return q;
+}
+
+inline float CylinderPenetration(const OBox& b, const V3& base, const V3& up, float radius, float height) {
+    float centre = Dot(b.center - base, up), half = 0;
+    for (int i = 0; i < 3; ++i)
+        half += std::fabs(Dot(b.axis[i], up)) * b.half[i];
+    if (centre + half <= 0 || centre - half >= height)
+        return -1;
+    V3 axis = base + up * Clamp(centre, 0, height);
+    V3 nearest = ClosestPoint(b, axis);
+    return radius - Len(Flatten(nearest - axis, up));
+}
+
+inline bool MovementEntersCylinder(const OBox& moving, const V3& step, const V3& base, const V3& up, float radius,
+                                   float height) {
+    if (!ValidOBox(moving) || !Finite(step) || !Finite(base) || !(radius > 0) || !(height > 0) ||
+        Dot(step, step) < 1e-12f)
+        return false;
+    float before = CylinderPenetration(moving, base, up, radius, height);
+    float after = CylinderPenetration(ShiftOBox(moving, step), base, up, radius, height);
+    return after > 0 && after > before + 1e-4f;
+}
+
+inline int SplitOBox(const OBox& b, OBox* out, int max) {
+    float thin = std::fmin(b.half[0], std::fmin(b.half[1], b.half[2]));
+    int n[3];
+    for (int i = 0; i < 3; ++i)
+        n[i] = thin > 1e-4f ? int(Clamp(std::ceil(b.half[i] / thin - 0.25f), 1, 3)) : 1;
+    int count = 0;
+    for (int x = 0; x < n[0]; ++x)
+        for (int y = 0; y < n[1]; ++y)
+            for (int z = 0; z < n[2]; ++z) {
+                if (count >= max)
+                    return count;
+                OBox c = b;
+                const int at[3] = {x, y, z};
+                c.center = b.center;
+                for (int i = 0; i < 3; ++i) {
+                    c.half[i] = b.half[i] / float(n[i]);
+                    c.center += b.axis[i] * (-b.half[i] + c.half[i] * float(2 * at[i] + 1));
+                }
+                out[count++] = c;
+            }
+    return count;
 }
 }
 

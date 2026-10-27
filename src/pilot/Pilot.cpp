@@ -1,11 +1,11 @@
 
 #include "pilot/Pilot.hpp"
-#include "core/Config.hpp"
 #include "render/Effect.hpp"
 #include "game/Game.hpp"
 #include "render/Overlay.hpp"
 #include <Spore/Simulator/cVehicle.h>
 #include <Spore/Simulator/cCommodityNode.h>
+#include <Spore/Simulator/cCreatureAnimal.h>
 #include <cstddef>
 #include <cmath>
 #include <cstring>
@@ -24,6 +24,10 @@ constexpr uint32_t kCursorDefault = 0x1002;
 constexpr uint32_t kCursorNone = 0x1001;
 
 constexpr uint32_t kCursorGoodieHut = 0x56e3a22;
+constexpr float kTurnRate = 1.7f, kMouseDegreesPerPixel = 0.25f;
+constexpr float kEnterSeconds = 1.0f, kExitSeconds = 0.8f, kPilotVignette = 0.22f;
+constexpr DWORD kDoubleClickMs = 450, kDoubleShiftMs = 400;
+constexpr uint32_t kDrivenFrameColor = 0xffff2020;
 constexpr float kLookUpMax = 1.25f;
 constexpr float kClickSlop = 4.0f;
 constexpr float kMarkerScale = 0.7f;
@@ -88,7 +92,8 @@ struct State {
     float arrowAngle = -vm::kPi / 2;
 
     V3 tiltUp{0, 0, 1};
-    float smoothR = 0, pitchDyn = 0, rollDyn = 0, lastSpeed = 0, time = 0;
+    float smoothR = 0, pitchDyn = 0, rollDyn = 0, lastSpeed = 0, time = 0, animSpeed = 0;
+    float wet = 0, wetTimer = 0;
     bool tiltInit = false;
 
     cGameData* dock = nullptr;
@@ -129,6 +134,10 @@ bool Piloting() {
     return S.mode == Mode::Entering || S.mode == Mode::Active;
 }
 
+bool UsesHeldFire() {
+    return S.purpose == kVehicleMilitary && S.loco == kVehicleAir;
+}
+
 float Wrap(float a) {
     while (a > vm::kPi)
         a -= 2 * vm::kPi;
@@ -149,14 +158,14 @@ game::CamXf Blend(const game::CamXf& a, const game::CamXf& b, float e) {
 
 void RestoreCursor() {
     if (S.forcedCursor) {
-        game::SetNativeCursor(S.nativeCursor ? S.nativeCursor : kCursorDefault);
+        game::SetNativeCursor(S.nativeCursor && S.nativeCursor != kCursorNone ? S.nativeCursor : kCursorDefault);
         S.forcedCursor = 0;
     }
 }
 
 uint32_t WantedCursor() {
-    if (S.orbit && (S.orbitVk == VK_MBUTTON || S.orbitMoved > kClickSlop))
-        return kCursorNone;
+    if (S.orbit)
+        return kCursorDefault;
     if (game::PieMenuOpen() || S.purpose == kVehicleEconomic)
         return 0;
     if (S.hoverValid && game::IsCityHall(S.hover))
@@ -228,11 +237,15 @@ vm::Q BuildOrientation(const V3& up, const V3& fwd, float bank) {
     return vm::ToQuat(m);
 }
 
+V3 Ground(const V3& p) {
+    return S.loco == kVehicleLand ? vm::Norm(p) * game::HeightAt(p) : game::ToSurface(p);
+}
+
 void InitMotion() {
     S.pos = game::Position(S.sp);
     S.vel = {0, 0, 0};
     float r = vm::Len(S.pos);
-    float sr = vm::Len(game::ToSurface(S.pos));
+    float sr = vm::Len(Ground(S.pos));
     S.radius = r;
     S.ground = 0;
     if (S.loco == kVehicleLand)
@@ -245,12 +258,13 @@ void InitMotion() {
     float base = std > des ? std : des;
     if (!(base >= 3.0f && base < 500.0f))
         base = S.loco == kVehicleAir ? 22.0f : (S.loco == kVehicleWater ? 12.0f : 14.0f);
-    S.maxSpeed = base * cfg::Get().speedMul;
-    S.turn = cfg::Get().turnRate * (S.loco == kVehicleWater ? 0.8f : (S.loco == kVehicleAir ? 0.85f : 1.0f));
+    S.maxSpeed = base;
+    S.turn = kTurnRate * (S.loco == kVehicleWater ? 0.8f : (S.loco == kVehicleAir ? 0.85f : 1.0f));
     S.speed = 0;
     S.bank = 0;
     S.bound = vm::Clamp(game::BoundingRadius(S.sp), 1.0f, 20.0f);
     S.tiltInit = false;
+    S.wet = S.wetTimer = 0;
     S.smoothR = r;
     S.pitchDyn = S.rollDyn = 0;
     S.lastSpeed = 0;
@@ -258,9 +272,8 @@ void InitMotion() {
 }
 
 void InitCamera() {
-    const auto& c = cfg::Get();
-    S.baseDist = vm::Clamp(S.bound * 7.0f, 14.0f, 90.0f) * c.camDistance * (S.loco == kVehicleAir ? 1.25f : 1.0f);
-    S.lookH = (S.bound * 0.9f + 1.0f) * c.camHeight;
+    S.baseDist = vm::Clamp(S.bound * 7.0f, 14.0f, 90.0f) * (S.loco == kVehicleAir ? 1.25f : 1.0f);
+    S.lookH = S.bound * 0.9f + 1.0f;
     S.camYaw = 0;
     S.camPitch = S.loco == kVehicleAir ? 0.30f : 0.36f;
     S.zoom = 1;
@@ -284,19 +297,6 @@ bool CityBlocks(const V3& from, const V3& to, V3* center = nullptr) {
     return false;
 }
 
-bool LandStepBlocked(const V3& from, const V3& to) {
-    V3 up = vm::Norm(to);
-    V3 dir = vm::Norm(vm::Flatten(to - from, up), S.fwd);
-    V3 nose = to + dir * (S.bound * 0.5f);
-    if (!game::IsInWater(from)) {
-        if (game::IsInWater(to) || game::IsInWater(nose))
-            return true;
-    } else if (game::IsInWater(to) && game::HeightAt(to) <= game::HeightAt(from)) {
-        return true;
-    }
-    return false;
-}
-
 bool ShipStepBlocked(const V3& from, const V3& to) {
     V3 up = vm::Norm(to);
     V3 dir = vm::Norm(vm::Flatten(to - from, up), S.fwd);
@@ -306,7 +306,9 @@ bool ShipStepBlocked(const V3& from, const V3& to) {
     return game::IsInWater(to) ? false : game::HeightAt(to) >= game::HeightAt(from);
 }
 
-bool Blocked(const V3& from, const V3& to) {
+bool Blocked(const V3& from, const V3& to, cVehicle** hit = nullptr) {
+    if (game::VehicleStepBlocked(S.veh, from, to, S.transposed, hit))
+        return true;
     if (S.loco == kVehicleLand && CityBlocks(from, to))
         return true;
     if (S.loco != kVehicleLand && S.loco != kVehicleWater)
@@ -318,11 +320,162 @@ bool Blocked(const V3& from, const V3& to) {
     V3 a = from;
     for (int i = 1; i <= n; ++i) {
         V3 b = vm::Lerp(from, to, float(i) / float(n));
-        if (S.loco == kVehicleLand ? LandStepBlocked(a, b) : ShipStepBlocked(a, b))
+        if (S.loco == kVehicleWater && ShipStepBlocked(a, b))
+            return true;
+        if (game::SceneryStepBlocked(S.veh, a, b, S.transposed))
             return true;
         a = b;
     }
     return false;
+}
+
+constexpr DWORD kTouchGapMs = 350, kGrindMs = 1200, kPushRamMs = 2000, kRamWindowMs = 12000, kRetreatMs = 2000,
+                kVoiceMs = 5000, kForgetMs = 20000;
+constexpr int kRamsForAttack = 3;
+constexpr float kTouchDamage = 0.02f;
+
+struct Contact {
+    cVehicle* other = nullptr;
+    DWORD seen = 0, hit = 0, retreat = 0, ram = 0;
+    DWORD rams[kRamsForAttack] = {};
+    int nextRam = 0;
+};
+
+struct Contacts {
+    Contact list[16];
+    cVehicle* pending[8] = {};
+    bool pendingRam[8] = {};
+    int pendingCount = 0;
+    DWORD voice = 0;
+} C;
+
+void CrewCallsIn(DWORD now) {
+    if (now - C.voice > kVoiceMs) {
+        C.voice = now;
+        game::PlayTakeFire(S.veh);
+    }
+}
+
+void NoteContact(cVehicle* other, bool ram) {
+    if (!other || other == S.veh)
+        return;
+    for (int i = 0; i < C.pendingCount; ++i)
+        if (C.pending[i] == other) {
+            C.pendingRam[i] |= ram;
+            return;
+        }
+    if (C.pendingCount == 8)
+        return;
+    other->AddRef();
+    C.pending[C.pendingCount] = other;
+    C.pendingRam[C.pendingCount++] = ram;
+}
+
+Contact* FindContact(cVehicle* other) {
+    Contact* free = nullptr;
+    Contact* oldest = &C.list[0];
+    for (auto& c : C.list) {
+        if (c.other == other)
+            return &c;
+        if (!c.other && !free)
+            free = &c;
+        if (int(c.seen - oldest->seen) < 0)
+            oldest = &c;
+    }
+    Contact* c = free ? free : oldest;
+    if (c->other)
+        c->other->Release();
+    *c = Contact{};
+    other->AddRef();
+    c->other = other;
+    return c;
+}
+
+void Collide(cVehicle* other, Contact& c, bool attack, DWORD now) {
+    auto* otherSp = game::Spatial(other);
+    float otherBound = vm::Clamp(game::BoundingRadius(otherSp), 1.0f, 20.0f);
+    V3 at = game::ContactPoint(S.veh, other, S.transposed);
+    game::CollisionSparks(at, S.pos - game::Position(otherSp),
+                          vm::Clamp(std::fmin(S.bound, otherBound) * 0.15f, 0.3f, 0.8f));
+    uint32_t me = game::PlayerPoliticalID(), them = other->cGameData::mPoliticalID;
+    game::VehicleDamage(other, kTouchDamage, attack && them != me ? me : uint32_t(-1), at, attack, kCollision);
+    bool hurtSelf = game::VehicleDamage(S.veh, kTouchDamage, uint32_t(-1), at, attack, kCollision);
+    if (hurtSelf)
+        CrewCallsIn(now);
+    bool hostile = game::HostileToPlayer(other, S.veh);
+    bool busy = them == me && game::HasOrders(other);
+    if (!hostile && !busy && game::VehicleAlive(other) && now - c.retreat > kRetreatMs) {
+        if (game::Retreat(other, S.pos, vm::Clamp((S.bound + otherBound) * 4.0f, 30.0f, 80.0f)))
+            c.retreat = now;
+    }
+}
+
+void Touch(cVehicle* other, bool ram, DWORD now) {
+    Contact& c = *FindContact(other);
+    bool fresh = now - c.seen > kTouchGapMs;
+    c.seen = now;
+    game::CollisionScrape(other, game::ContactPoint(S.veh, other, S.transposed));
+    if (!fresh && now - c.hit < kGrindMs)
+        return;
+    c.hit = now;
+    ram = ram && (fresh || now - c.ram >= kPushRamMs);
+    if (ram) {
+        c.ram = now;
+        c.rams[c.nextRam++ % kRamsForAttack] = now;
+    }
+    bool attack = ram;
+    for (DWORD t : c.rams)
+        attack = attack && t && now - t <= kRamWindowMs;
+    Collide(other, c, attack, now);
+}
+
+void ProcessContacts() {
+    DWORD now = Now();
+    for (int i = 0; i < C.pendingCount; ++i) {
+        cVehicle* other = C.pending[i];
+        if (S.mode == Mode::Active && !S.cinematic && S.veh && game::VehicleAlive(S.veh) && game::VehicleAlive(other))
+            Touch(other, C.pendingRam[i], now);
+        other->Release();
+    }
+    C.pendingCount = 0;
+    for (auto& c : C.list)
+        if (c.other && now - c.seen > kForgetMs) {
+            c.other->Release();
+            c = Contact{};
+        }
+}
+
+void UpdateWater(float dt) {
+    float water = game::WaterLevel(), bottom = 0, top = 0;
+    bool wet = S.loco == kVehicleLand && water > 0 && game::VehicleHeightSpan(S.veh, S.transposed, bottom, top) &&
+               water > bottom;
+    float was = S.wet;
+    S.wet = wet ? vm::Clamp((water - bottom) / (top - bottom), 0.0f, 1.0f) : 0.0f;
+    if (S.wet < 0.05f) {
+        S.wetTimer = 0;
+        return;
+    }
+    DWORD now = Now();
+    if (was < 0.05f)
+        CrewCallsIn(now);
+    S.wetTimer += dt;
+    float interval = 1.0f - 0.75f * S.wet;
+    if (S.wetTimer < interval)
+        return;
+    S.wetTimer = std::fmin(S.wetTimer - interval, interval);
+    if (game::VehicleDamage(S.veh, 0.01f + 0.05f * S.wet, uint32_t(-1), S.pos, true, kDrowning))
+        CrewCallsIn(now);
+}
+
+void ClearContacts() {
+    for (int i = 0; i < C.pendingCount; ++i)
+        C.pending[i]->Release();
+    C.pendingCount = 0;
+    for (auto& c : C.list)
+        if (c.other) {
+            c.other->Release();
+            c = Contact{};
+        }
 }
 
 void Drive(float dt) {
@@ -338,7 +491,8 @@ void Drive(float dt) {
             throttle = float((Down('W') || Down(VK_UP)) ? 1 : 0) - float((Down('S') || Down(VK_DOWN)) ? 1 : 0);
             steer = float((Down('D') || Down(VK_RIGHT)) ? 1 : 0) - float((Down('A') || Down(VK_LEFT)) ? 1 : 0);
         }
-        float target = throttle > 0 ? S.maxSpeed : (throttle < 0 ? -S.maxSpeed * 0.5f : 0.0f);
+        float limit = S.maxSpeed * (1.0f - 0.75f * S.wet);
+        float target = throttle > 0 ? limit : (throttle < 0 ? -limit * 0.5f : 0.0f);
         float rate =
             (std::fabs(target) > std::fabs(S.speed) && target * S.speed >= 0) ? S.maxSpeed * 1.4f : S.maxSpeed * 2.6f;
         if (S.speed < target)
@@ -355,9 +509,12 @@ void Drive(float dt) {
         V3 step = S.fwd * (S.speed * dt);
         if (vm::Len(step) > 1e-5f) {
             V3 cand = pos + step;
-            if (!Blocked(pos, cand)) {
+            cVehicle* hit = nullptr;
+            if (!Blocked(pos, cand, &hit)) {
                 next = cand;
             } else {
+                if (hit)
+                    NoteContact(hit, true);
                 bool moved = false;
                 V3 c;
                 if (S.loco == kVehicleLand && CityBlocks(pos, cand, &c)) {
@@ -382,11 +539,14 @@ void Drive(float dt) {
                     S.speed = 0;
             }
         }
+        S.animSpeed = std::fmax(std::fabs(S.speed), std::fabs(yaw) / dt * S.bound * 0.5f);
+    } else {
+        S.animSpeed = 0;
     }
 
     V3 nUp = vm::Norm(next);
     V3 right = vm::Norm(vm::Cross(S.fwd, nUp), {1, 0, 0});
-    float sr = vm::Len(game::ToSurface(next));
+    float sr = vm::Len(Ground(next));
     float r;
     V3 bodyUp = nUp;
     S.time += dt;
@@ -405,8 +565,8 @@ void Drive(float dt) {
         bodyUp = vm::Rotate(nUp, S.fwd, S.bank);
     } else {
         float d = vm::Clamp(S.bound * 0.75f, 1.0f, 8.0f);
-        V3 pF = game::ToSurface(next + S.fwd * d), pB = game::ToSurface(next - S.fwd * d);
-        V3 pR = game::ToSurface(next + right * d), pL = game::ToSurface(next - right * d);
+        V3 pF = Ground(next + S.fwd * d), pB = Ground(next - S.fwd * d);
+        V3 pR = Ground(next + right * d), pL = Ground(next - right * d);
         float avg = (sr * 2 + vm::Len(pF) + vm::Len(pB) + vm::Len(pR) + vm::Len(pL)) / 6.0f;
         V3 n = vm::Norm(vm::Cross(pR - pL, pF - pB), nUp);
         if (S.loco == kVehicleWater || vm::Dot(n, nUp) < 0.45f)
@@ -464,10 +624,14 @@ void UpdateClaim() {
 }
 
 bool TypeValid(cGameData* obj) {
+    if (!obj || obj->mbIsDestroyed)
+        return false;
     uint32_t me = game::PlayerPoliticalID();
     uint32_t pid = obj->mPoliticalID;
     if (auto* v = game::AsVehicle(obj))
         return pid != me && game::VehicleAlive(v);
+    if (game::Cast(obj, cCreatureAnimal::TYPE))
+        return pid != me;
     if (game::Cast(obj, 0xE9CB8BA) || game::Cast(obj, 0x436F315))
         return pid != me && pid != uint32_t(-1);
     if (game::Cast(obj, 0x403DF5F))
@@ -513,10 +677,13 @@ int EconomicSpiceRange(cGameData* target, const V3& position) {
 int InActionRange(cGameData* t) {
     if (!t)
         return -1;
-    // Economic vehicles have no attack range. Only spice targets get a
-    // distance result; cities and every other object keep a neutral ring.
     if (S.purpose == kVehicleEconomic)
         return EconomicSpiceRange(t, S.pos);
+    if (S.purpose == kVehicleCultural && !IsClaimTarget(t)) {
+        t = game::FaithTarget(S.veh, t);
+        if (!t)
+            return 0;
+    }
     auto* ts = static_cast<cSpatialObject*>(game::Cast(t, 0x1186577));
     if (IsClaimTarget(t)) {
         if (!ts)
@@ -542,47 +709,57 @@ uint32_t ActionRangeColor(cGameData* target) {
 
 bool CityHallAttackable(cGameData* hall) {
     uint32_t pid = hall ? uint32_t(hall->mPoliticalID) : uint32_t(-1);
-    return game::IsCityHall(hall) && S.purpose == kVehicleMilitary && pid != uint32_t(-1) &&
-           pid != game::PlayerPoliticalID() && game::CityDefenseless(game::CityOf(hall));
+    if (!game::IsCityHall(hall) || hall->mbIsDestroyed || pid == uint32_t(-1) || pid == game::PlayerPoliticalID())
+        return false;
+    auto* city = game::CityOf(hall);
+    if (S.purpose == kVehicleCultural)
+        return game::CityConvertible(city);
+    return S.purpose == kVehicleMilitary && game::CityDefenseless(city);
 }
 
-void Fire(cGameData* target) {
+bool Fire(cGameData* target) {
     if (!target || !S.veh)
-        return;
+        return false;
     if (game::EconomicTarget(S.veh, target)) {
         EnsureSelected(true);
         S.ownAct = true;
-        game::Act(S.veh, target, S.actKey);
+        bool accepted = game::Act(S.veh, target, S.actKey);
         S.ownAct = false;
-        return;
+        return accepted;
     }
     if (game::IsCityHall(target)) {
         EnsureSelected(true);
         S.ownAct = true;
-        game::AttackCity(S.veh, game::CityOf(target));
+        bool accepted = game::AttackCity(S.veh, game::CityOf(target));
         S.ownAct = false;
+        if (!accepted)
+            return false;
         S.orderTarget = game::CurrentOrderTarget(S.veh);
         S.fireTarget = target;
         S.lastFireTick = Now();
         S.dock = nullptr;
-        return;
+        return true;
     }
     if (IsClaimTarget(target)) {
         if (game::StartClaim(target, S.veh)) {
             S.fireTarget = target;
             S.lastFireTick = Now();
-            return;
+            return true;
         }
     }
     EnsureSelected(true);
     S.ownAct = true;
-    game::Act(S.veh, target, S.actKey);
+    bool faith = S.purpose == kVehicleCultural && !IsClaimTarget(target);
+    bool accepted = faith ? game::AttackFaith(S.veh, target) : game::Act(S.veh, target, S.actKey);
     S.ownAct = false;
+    if (!accepted)
+        return false;
     S.orderTarget = game::CurrentOrderTarget(S.veh);
     S.fireTarget = target;
     S.lastFireTick = Now();
     S.dock = IsClaimTarget(target) && S.orderTarget ? target : nullptr;
     S.dockTick = Now();
+    return true;
 }
 
 bool TryFire(cGameData* target) {
@@ -598,14 +775,13 @@ bool TryFire(cGameData* target) {
         return false;
     }
     S.refusedTarget = nullptr;
-    Fire(target);
-    return true;
+    return Fire(target);
 }
 
 void AttackPress() {
     cGameData* target = S.hoverValid ? S.hover : nullptr;
     S.refusedTarget = nullptr;
-    if (S.loco == kVehicleAir && S.purpose != kVehicleEconomic) {
+    if (UsesHeldFire()) {
         S.firing = true;
         if (target)
             TryFire(target);
@@ -615,7 +791,7 @@ void AttackPress() {
 }
 
 void AttackRelease() {
-    if (S.loco == kVehicleAir && S.firing) {
+    if (UsesHeldFire() && S.firing) {
         S.firing = false;
         S.fireTarget = nullptr;
         if (S.veh)
@@ -635,7 +811,7 @@ void UpdateAim() {
     if (game::EconomicTarget(S.veh, S.hover))
         S.hoverValid = game::EconomicMenuUsable();
 
-    if (S.loco == kVehicleAir && S.firing) {
+    if (UsesHeldFire() && S.firing) {
         if (!Down(VK_LBUTTON) || !game::GameHasFocus()) {
             AttackRelease();
         } else if (S.hoverValid && S.hover != S.fireTarget && Now() - S.lastFireTick > 250) {
@@ -649,14 +825,11 @@ void UpdateAim() {
         }
     }
 
-    if (!cfg::Get().autonomousFire) {
-        cGameData* t = game::CurrentOrderTarget(S.veh);
-        bool ui = S.uiOrderSet && t && (!S.uiOrder || t == S.uiOrder);
-        bool mine =
-            t && (ui || t == S.raid || t == S.dock || (t == S.orderTarget && (S.loco != kVehicleAir || S.firing)));
-        if (t && !mine)
-            game::ClearOrders(S.veh);
-    }
+    cGameData* t = game::CurrentOrderTarget(S.veh);
+    bool ui = S.uiOrderSet && t && (!S.uiOrder || t == S.uiOrder);
+    bool mine = t && (ui || t == S.raid || t == S.dock || (t == S.orderTarget && (!UsesHeldFire() || S.firing)));
+    if (t && !mine)
+        game::ClearOrders(S.veh);
     EnsureSelected(false);
     UpdateCursor();
 }
@@ -711,8 +884,6 @@ void CancelTradeForManualDrive() {
     int kind = game::CurrentOrderKind(S.veh);
     if (kind != game::kOrderTrade && kind != game::kOrderProposeTrade)
         return;
-    // Manual driving cancels this vehicle's trade task, including permission
-    // for its native continuation. Releasing the key must not resume it.
     S.uiOrderSet = false;
     S.uiOrder = nullptr;
     S.rolloverClickTick = 0;
@@ -788,7 +959,8 @@ void UpdateOverlay() {
     float minR = 0, maxR = 0;
     bool weapon = game::WeaponRange(S.veh, minR, maxR);
     bool claim = S.hoverValid && IsClaimTarget(S.hover);
-    auto* ts = S.hoverValid ? static_cast<cSpatialObject*>(game::Cast(S.hover, 0x1186577)) : nullptr;
+    auto* ringTarget = S.hoverValid ? S.hover : nullptr;
+    auto* ts = ringTarget ? static_cast<cSpatialObject*>(game::Cast(ringTarget, 0x1186577)) : nullptr;
 
     uint32_t status = ActionRangeColor(S.hoverValid ? S.hover : nullptr);
 
@@ -861,7 +1033,6 @@ void UpdateOverlay() {
 }
 
 void UpdateOrbit(float dt) {
-    const auto& c = cfg::Get();
     if (S.orbit) {
         if (!Down(S.orbitVk) || !game::GameHasFocus()) {
             S.orbit = false;
@@ -870,16 +1041,13 @@ void UpdateOrbit(float dt) {
             if (GetCursorPos(&p)) {
                 float dx = float(p.x - S.anchor.x), dy = float(p.y - S.anchor.y);
                 S.orbitMoved += std::fabs(dx) + std::fabs(dy);
-                if (c.lockCursorOnOrbit)
-                    SetCursorPos(S.anchor.x, S.anchor.y);
-                else
-                    S.anchor = p;
-                float k = c.mouseSens * vm::kPi / 180.0f;
+                SetCursorPos(S.anchor.x, S.anchor.y);
+                float k = kMouseDegreesPerPixel * vm::kPi / 180.0f;
                 S.camYaw = Wrap(S.camYaw - dx * k);
-                S.camPitch = vm::Clamp(S.camPitch + dy * k * (c.invertY ? -1.0f : 1.0f), -kLookUpMax, 1.35f);
+                S.camPitch = vm::Clamp(S.camPitch + dy * k, -kLookUpMax, 1.35f);
             }
         }
-    } else if (c.autoCenter && S.mode == Mode::Active && S.speed > S.maxSpeed * 0.25f) {
+    } else if (S.mode == Mode::Active && S.speed > S.maxSpeed * 0.25f) {
         S.camYaw *= std::exp(-dt / 1.4f);
     }
     if (S.wheel) {
@@ -948,6 +1116,7 @@ void Unlock() {
     S.lock = nullptr;
     S.cinematic = false;
     if (S.veh) {
+        game::TintVehicleListFrame(S.veh, 0);
         if (S.firing)
             game::ClearOrders(S.veh);
         if (game::VehicleAlive(S.veh)) {
@@ -978,6 +1147,8 @@ void Unlock() {
     S.uiOrderSet = false;
     S.uiOrder = nullptr;
     S.ownAct = false;
+    S.animSpeed = 0;
+    ClearContacts();
     game::WantCityRolloverHidden(false);
     overlay::Clear();
 }
@@ -1018,7 +1189,7 @@ void Enter(cVehicle* v) {
     game::SelectOnly(S.sp);
     S.from = start;
     S.t = 0;
-    S.dur = cfg::Get().enterSeconds;
+    S.dur = kEnterSeconds;
     S.mode = haveStart ? Mode::Entering : Mode::Active;
     S.shiftWas = Down(VK_SHIFT);
     S.escWas = Down(VK_ESCAPE);
@@ -1040,7 +1211,7 @@ void BeginExit(bool flight) {
     if (flight && S.haveLast && S.viewer) {
         S.from = S.last;
         S.t = 0;
-        S.dur = cfg::Get().exitSeconds;
+        S.dur = kExitSeconds;
         S.mode = Mode::Exiting;
         fx::Ensure();
     } else {
@@ -1060,7 +1231,7 @@ void IdleShift() {
     bool sh = S.mode == Mode::Idle && game::GameHasFocus() && Down(VK_SHIFT);
     if (sh && !S.shiftWas) {
         DWORD now = Now();
-        if (S.lastShiftTick && now - S.lastShiftTick <= DWORD(cfg::Get().doubleShiftMs)) {
+        if (S.lastShiftTick && now - S.lastShiftTick <= kDoubleShiftMs) {
             S.lastShiftTick = 0;
             if (cVehicle* v = game::SelectedPlayerVehicle())
                 RequestEnter(v);
@@ -1108,7 +1279,7 @@ bool UpdateCinematic() {
         if (S.viewer && game::ReadViewer(S.viewer, native)) {
             S.from = native;
             S.t = 0;
-            S.dur = cfg::Get().enterSeconds;
+            S.dur = kEnterSeconds;
             S.mode = Mode::Entering;
             fx::Ensure();
         }
@@ -1178,7 +1349,7 @@ bool SwitchClick(float x, float y) {
     if (v == S.veh)
         v = nullptr;
     DWORD now = Now();
-    if (v && v == S.lastClickVeh && now - S.lastClickTick <= DWORD(cfg::Get().doubleClickMs) &&
+    if (v && v == S.lastClickVeh && now - S.lastClickTick <= kDoubleClickMs &&
         std::fabs(x - S.lastClickX) < 30 && std::fabs(y - S.lastClickY) < 30) {
         S.lastClickVeh = nullptr;
         RequestEnter(v);
@@ -1197,8 +1368,6 @@ bool OnMouseDown(int button, float x, float y) {
     if (S.cinematic)
         return false;
     if (Piloting()) {
-        // A pie menu handles clicks outside its buttons too (to dismiss it).
-        // Pass both halves of UI clicks through, without also firing at the world.
         if (game::PieMenuOpen() || game::MouseOverUI()) {
             if (idx >= 0 && idx < 8)
                 S.swallowBtn[idx] = false;
@@ -1222,7 +1391,7 @@ bool OnMouseDown(int button, float x, float y) {
         return false;
     cVehicle* v = game::PlayerVehicle(game::PickHovered());
     DWORD now = Now();
-    if (v && v == S.lastClickVeh && now - S.lastClickTick <= DWORD(cfg::Get().doubleClickMs) &&
+    if (v && v == S.lastClickVeh && now - S.lastClickTick <= kDoubleClickMs &&
         std::fabs(x - S.lastClickX) < 12 && std::fabs(y - S.lastClickY) < 12) {
         S.lastClickVeh = nullptr;
         S.swallowBtn[0] = true;
@@ -1250,6 +1419,8 @@ bool OnMouseUp(int button) {
             S.orbit = false;
         if (click && S.mode == Mode::Active && S.veh) {
             game::ClearOrders(S.veh);
+            if (S.purpose == kVehicleCultural)
+                game::StopFaithWeapon(S.veh);
             S.firing = false;
             S.fireTarget = nullptr;
             S.orderTarget = nullptr;
@@ -1260,7 +1431,6 @@ bool OnMouseUp(int button) {
 
 bool OnMouseMove(uint32_t& state) {
     if (Piloting() && !S.cinematic) {
-        // Keep native button state for UI drags, even after leaving the widget.
         for (int i = 0; i < 3; ++i)
             if (S.swallowBtn[i])
                 state &= ~uint32_t(8 << i);
@@ -1293,6 +1463,7 @@ void AfterCivUpdate(float realSeconds) {
         BeginExit(game::InCiv());
         return;
     }
+    game::TintVehicleListFrame(S.veh, kDrivenFrameColor);
     if (UpdateCinematic())
         return;
 
@@ -1307,7 +1478,7 @@ void AfterCivUpdate(float realSeconds) {
     bool sh = focus && Down(VK_SHIFT);
     if (sh && !S.shiftWas) {
         DWORD now = Now();
-        if (S.lastShiftTick && now - S.lastShiftTick <= DWORD(cfg::Get().doubleShiftMs)) {
+        if (S.lastShiftTick && now - S.lastShiftTick <= kDoubleShiftMs) {
             S.shiftWas = sh;
             BeginExit(true);
             return;
@@ -1316,12 +1487,13 @@ void AfterCivUpdate(float realSeconds) {
     }
     S.shiftWas = sh;
 
-    if (!cfg::Get().autonomousFire)
-        game::SuppressAutoCombat(S.veh, true);
+    game::SuppressAutoCombat(S.veh, true);
     int simMs = game::ConvertDeltaMs(int(realDt * 1000.0f + 0.5f));
     UpdateClaim();
     if (!RaidDocking())
         Drive(float(simMs) / 1000.0f);
+    ProcessContacts();
+    UpdateWater(float(simMs) / 1000.0f);
     if (S.hover && game::IsCityHall(S.hover))
         S.rolloverTick = Now();
     if (focus && Down(VK_LBUTTON) && game::OverCityRollover())
@@ -1341,20 +1513,19 @@ void AfterCivUpdate(float realSeconds) {
     }
 
     game::CamXf xf = PilotCamera(realDt);
-    const auto& c = cfg::Get();
     if (S.mode == Mode::Entering) {
         S.t += realDt;
         float u = vm::Clamp(S.t / S.dur, 0, 1);
         float e = vm::EaseInOutCubic(u);
         xf = Blend(S.from, xf, e);
-        fx::Set(std::sin(vm::kPi * u), 1.0f, c.pilotVignette * e);
+        fx::Set(std::sin(vm::kPi * u), 1.0f, kPilotVignette * e);
         if (u >= 1) {
             S.mode = Mode::Active;
             fx::DropCapture();
-            fx::Set(0, 1, c.pilotVignette);
+            fx::Set(0, 1, kPilotVignette);
         }
     } else {
-        fx::Set(0, 1, c.pilotVignette);
+        fx::Set(0, 1, kPilotVignette);
     }
     if (S.viewer) {
         game::WriteViewer(S.viewer, xf);
@@ -1398,7 +1569,7 @@ void CameraFrame(App::cViewer* viewer, int deltaMs, bool nativeRan) {
     game::CamXf out = Blend(S.from, native, e);
     game::WriteViewer(S.viewer, out);
     S.last = out;
-    fx::Set(std::sin(vm::kPi * u), -1.0f, cfg::Get().pilotVignette * (1 - e));
+    fx::Set(std::sin(vm::kPi * u), -1.0f, kPilotVignette * (1 - e));
     if (u >= 1) {
         S.mode = Mode::Idle;
         fx::Off();
@@ -1406,6 +1577,7 @@ void CameraFrame(App::cViewer* viewer, int deltaMs, bool nativeRan) {
 }
 
 void OnAppUpdate() {
+    game::UpdateCollisionSparks();
     if (S.mode == Mode::Idle) {
         if (S.pending && !game::InCiv()) {
             S.pending->Release();
@@ -1433,6 +1605,35 @@ bool BlockVehicleWrite(const void* spatial) {
     return S.lock && spatial == S.lock;
 }
 
+bool LimitOtherVehicleMove(const void* spatial, const float* position, float allowed[3]) {
+    if (!Piloting() || !S.lock || !S.veh || S.cinematic || spatial == S.sp || !position)
+        return false;
+    V3 limit;
+    cVehicle* other = game::ForeignVehicleStepBlocked(S.veh, spatial, {position[0], position[1], position[2]},
+                                                      S.transposed, limit);
+    if (!other)
+        return false;
+    NoteContact(other, false);
+    allowed[0] = limit.x;
+    allowed[1] = limit.y;
+    allowed[2] = limit.z;
+    return true;
+}
+
+bool MoveAnimationSpeed(const void* state, const void* model, float standard, float& out) {
+    if (!S.lock || !S.sp || !S.veh)
+        return false;
+    bool owner = game::MoveAnimationOwner(state) == S.sp, own = model == S.sp->mpModel.get();
+    if (!owner && !own)
+        return false;
+    out = S.animSpeed;
+    if (game::ContinuousMoveAnimation(S.veh) && standard > 0) {
+        float k = S.loco == kVehicleAir ? 0.4f : (S.loco == kVehicleWater ? 0.1f : 0.3f);
+        out = standard * (k + (1 - k) * vm::Clamp(out / standard, 0, 1));
+    }
+    return true;
+}
+
 bool VelocityFor(const void* locomotive, float out[3]) {
     if (!S.lock || locomotive != S.lock)
         return false;
@@ -1457,7 +1658,7 @@ uint32_t FilterCursor(uint32_t id) {
 }
 
 bool RefuseCombatTarget(const void* combatant, const void* target) {
-    if (!target || !Piloting() || !S.veh || cfg::Get().autonomousFire)
+    if (!target || !Piloting() || !S.veh)
         return false;
     if (combatant != static_cast<const void*>(static_cast<cCombatant*>(S.veh)))
         return false;
@@ -1471,21 +1672,14 @@ bool RefuseOrder(const void* vehicle, const void* target, int kind, uint32_t va)
         return false;
     if (S.purpose == kVehicleEconomic && kind == game::kOrderBribeNode) {
         auto* node = static_cast<cGameData*>(const_cast<void*>(target));
-        // The vehicle may have left the green zone after opening the menu.
-        // Check its live position before the native bribe order can be added.
         if (!S.sp || !game::EconomicTarget(S.veh, node) ||
             EconomicSpiceRange(node, game::Position(S.sp)) != 1) {
             game::PlayRefusal();
             return true;
         }
     }
-    if (cfg::Get().autonomousFire)
-        return false;
     if (S.ownAct)
         return false;
-    // The native proposal behaviour replaces order 9 with delivery order 5
-    // after acceptance (or if the route already exists). It continues the
-    // player's order; permission expires when that proposal is cleared/replaced.
     if (S.purpose == kVehicleEconomic && S.uiOrderSet && target && target == S.uiOrder &&
         kind == game::kOrderTrade && game::IsTradeContinuationCaller(va) &&
         game::CurrentOrderTarget(S.veh) == target && game::CurrentOrderKind(S.veh) == game::kOrderProposeTrade)

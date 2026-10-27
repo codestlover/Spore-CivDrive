@@ -11,6 +11,7 @@
 #include <Spore/Simulator/cCityWalls.h>
 #include <Spore/Simulator/cCivilization.h>
 #include <Spore/Simulator/cCommodityNode.h>
+#include <Spore/Simulator/cCulturalTarget.h>
 #include <Spore/Simulator/cGameTerrainCursor.h>
 #include <Spore/Simulator/SubSystem/GameNounManager.h>
 #include <Spore/Simulator/SubSystem/GameModeManager.h>
@@ -19,18 +20,25 @@
 #include <Spore/Simulator/SubSystem/GameTimeManager.h>
 #include <Spore/Simulator/SubSystem/PlanetModel.h>
 #include <Spore/Simulator/SubSystem/CinematicManager.h>
+#include <Spore/Simulator/SubSystem/cRelationshipManager.h>
+#include <Spore/Swarm/IEffectsManager.h>
 #include <Spore/UTFWin/IWindowManager.h>
 #include <Spore/UTFWin/IWindow.h>
 #include <Spore/UTFWin/CursorManager.h>
 #include <Spore/Audio/AudioSystem.h>
 #include <Spore/UTFWin/Image.h>
 #include <Spore/Graphics/IShadowWorld.h>
+#include <Spore/Graphics/IModelWorld.h>
+#include <Spore/App/IPropManager.h>
+#include <Spore/App/Property.h>
 #include <Spore/Resource/IResourceManager.h>
 #include <Spore/Resource/Database.h>
 #include <Spore/Resource/IRecord.h>
 #include <cmath>
 #include <cstddef>
 #include <cstring>
+#include <cstdio>
+#include <vector>
 
 using namespace Simulator;
 
@@ -42,11 +50,15 @@ static_assert(offsetof(cVehicle, mIdlePosition) == 0xb80, "cVehicle::mIdlePositi
 static_assert(offsetof(cVehicle, mbDead) == 0xbcd, "cVehicle::mbDead");
 static_assert(offsetof(cGameData, mbIsDestroyed) == 0x21, "cGameData::mbIsDestroyed");
 static_assert(offsetof(cGameData, mPoliticalID) == 0x30, "cGameData::mPoliticalID");
+static_assert(sizeof(Graphics::FilterSettings) == 0x18, "model query filter ABI");
+static_assert(offsetof(Graphics::FilterSettings, flags) == 0x15, "model query flags ABI");
+static_assert(sizeof(Math::BoundingBox) == 0x18, "model query bounds ABI");
 static_assert(offsetof(cSpatialObject, mPosition) == 0x4, "cSpatialObject::mPosition");
 static_assert(offsetof(cSpatialObject, mOrientation) == 0x10, "cSpatialObject::mOrientation");
 static_assert(offsetof(cSpatialObject, mBoundingRadius) == 0x5c, "cSpatialObject::mBoundingRadius");
 static_assert(offsetof(cSpatialObject, mbIsSelected) == 0x6c, "cSpatialObject::mbIsSelected");
 static_assert(offsetof(cCity, mpCityWalls) == 0x324, "cCity::mpCityWalls");
+static_assert(offsetof(cCity, mCulturalTargets) == 0x62c, "cCity::mCulturalTargets");
 static_assert(offsetof(cCityWalls, mpDock) == 0x10c, "cCityWalls::mpDock");
 static_assert(offsetof(cCityWalls, mGatesTransformed) == 0x198, "cCityWalls::mGatesTransformed");
 static_assert(offsetof(cCityWalls, mOuterRadius) == 0x25c, "cCityWalls::mOuterRadius");
@@ -177,7 +189,9 @@ bool terrainCursorOk = false, viewManagerOk = false, cursorOk = false, rangeOk =
      minimapOk = false, rolloverOk = false, soundOk = false, listenerHookOk = false, minimapCameraOk = false,
      tribeOk = false, shadowOk = false, orderHookOk = false, claimOk = false, stanceOk = false, vehiclesOk = false,
      cinematicOk = false, cityAttackOk = false, cityEditorOk = false, economicMenuOk = false,
-     tradeContinuationOk = false;
+     tradeContinuationOk = false, cityConvertOk = false, faithAttackOk = false, sceneryOk = false, bodiesOk = false,
+     collisionOk = false, takeFireOk = false, retreatOk = false, relationsOk = false, effectsOk = false,
+     moveAnimOk = false, vehicleListOk = false, rocksOk = false, scrapeOk = false, waterOk = false;
 
 const void* economicCityMenu = nullptr;
 }
@@ -204,8 +218,6 @@ bool EconomicMenuUsable() {
 }
 
 bool AllowPieMenuItem(const void* menu, uint32_t command) {
-    // Only narrow the menu being built for our economic vehicle. The native
-    // builders still supply all labels, prices and disabled states.
     return !economicCityMenu || menu != economicCityMenu || command == 0x37e95bb || command == 0x37e95bc ||
            command == 0x37e95bd;
 }
@@ -287,6 +299,14 @@ bool Verify() {
     ok &= Slot(raw::VehicleSpatialVtable, 0x5c, 0xc891b0);
     ok &= Slot(raw::VehicleSpatialVtable, 0xec, 0xc43800);
     rangeOk = Slot(raw::VehicleCombatantVtable, 0x40, 0xbfc8e0) && Slot(raw::VehicleCombatantVtable, 0x14, 0xc9f370);
+    bodiesOk = Slot(raw::VehicleSpatialVtable, 0x68, 0xad2740) && Bytes(0xad2740, "8d4138c3") &&
+               Slot(raw::VehicleSpatialVtable, 0xb8, 0xca7f90);
+    sceneryOk = bodiesOk && Slot(raw::TerrainSphereVtable, 0xb0, 0xf97630) &&
+                Slot(raw::ModelWorldVtable, 0x4c, 0x74a0e0) &&
+                uintptr_t(GetAddress(Math::BoundingBox, ApplyTransform)) == Va<uintptr_t>(0x409dd0) &&
+                Bytes(0xb846dd, "8b4e248b118b92b0000000") &&
+                Bytes(0xf97630, "8b81d80700003b81dc070000") &&
+                Bytes(0x74a299, "8b869c00000085c0744483b8cc00000000");
     ok &= ForeignOrBytes(raw::SetVelocity, "8b4424048b108991c80100008b500489");
     ok &= Bytes(0xbec240, "568bf18b46348b502c8d4e34ffd28b4c");
     audioOk = Slot(raw::AudioSystemVtable, 0x0c, 0xa209b0) && Slot(raw::AudioSystemVtable, 0x10, 0xa20c90);
@@ -319,12 +339,48 @@ bool Verify() {
                    Bytes(0xbd9cc0, "53568bb154030000578bb95803000033") &&
                    Bytes(0xc9efc0, "8b4424048981280d00008981240d0000") && Bytes(0xdcd3ef, "8b471033f683e802") &&
                    Bytes(0xdce930, "6832229bee");
+    cityConvertOk = orderHookOk && Bytes(0xcf36db, "83bf200b000001") && Bytes(0xcf3758, "6a03ffd0") &&
+                    Bytes(0xcf3781, "508bcee887faffff") &&
+                    Bytes(0xc9efc0, "8b4424048981280d00008981240d0000");
+    faithAttackOk = stanceOk && orderHookOk && rangeOk &&
+                  Bytes(raw::StopVehicleWeapons, "53578bf98b9f680c00002b9f640c0000") &&
+                  Bytes(raw::ChooseCultureTarget, "83ec20578bf98b078b502c897c240cffd284") &&
+                  Bytes(raw::ValidCombatTarget, "568b74240c85f6750432c05ec3") &&
+                  Bytes(0xc9efc0, "8b4424048981280d00008981240d0000");
     cityEditorOk = Bytes(0xcfe55a, "8b8ee80000008b898000000085c9740653") && Bytes(0xd124e5, "8bd9837b400056570f84") &&
                    Bytes(0xcf4bbc, "89b780000000");
     cinematicOk = uintptr_t(GetAddress(Simulator::cCinematicManager, Get)) == Va<uintptr_t>(0xb3d5d0) &&
                   Bytes(0xe35341, "8b402c83f801740983f802");
     soundOk = Bytes(raw::NewAudioTrack, "558bec83ec08e815a35e008945fc837d") &&
               uintptr_t(GetAddress(Audio, PlayAudio)) == Va<uintptr_t>(0x436390);
+    collisionOk = bodiesOk && vehiclesOk && Slot(raw::VehicleCombatantVtable, 0x18, raw::VehicleTakeDamage) &&
+                  Bytes(raw::VehicleTakeDamage, "81ec8400000053558be98b85f8faffff");
+    takeFireOk = soundOk && Bytes(raw::TakeFireVoices, "bc7a5ce583c3c45988935b91") &&
+                 Bytes(0xca7334, "8b8e200b00008b148d7c4a4701");
+    retreatOk = orderHookOk && Bytes(raw::StartOrders, "8b4424048981280d00008981240d0000");
+    waterOk = Bytes(raw::WaterLevel, "8379240074148b49248b018b500cffd2d9403cd84838d84034c3") &&
+              Bytes(0xb817a2, "f30f10403cf30f594038f30f584034") &&
+              uintptr_t(GetAddress(Simulator::cPlanetModel, GetHeightAt)) == Va<uintptr_t>(0xb7f0c0);
+    scrapeOk = soundOk && Bytes(raw::PlayAudioAt, "56e8eae64a008bf085f60f8480000000") &&
+               Bytes(raw::StopAudio, "56e84ae64a008bf085f6743e");
+    effectsOk = uintptr_t(GetAddress(Swarm::IEffectsManager, Get)) == Va<uintptr_t>(0x67dd90);
+    relationsOk = uintptr_t(GetAddress(Simulator::cRelationshipManager, Get)) == Va<uintptr_t>(0xb3d3c0) &&
+                  Bytes(raw::IsAtWar, "8b442408568bf18b4c2408505150518b") &&
+                  Bytes(raw::RelationshipMap, "56578d4424108bf1508d4c24") &&
+                  Bytes(raw::RelationshipData, "83ec0856578d44241c508d4c");
+    moveAnimOk = ForeignOrBytes(raw::MoveAnimation, "56578b7c241c8bf185ff0f849c0000008b47048b") &&
+                 Bytes(0xe96a90, "8db5b0000000") && Bytes(0xe96abb, "e830dfffff") && Bytes(0xe956da, "8b4d0c") &&
+                 Bytes(raw::ContinuousMoveAnimation, "8b811c0b000083e800741083e8017408") &&
+                 Bytes(raw::MoveAnimationThreshold, "cdcccc3d");
+    vehicleListOk = minimapOk && Bytes(0xceb5d4, "83fd04750233ed397cab6c") && Bytes(0xceb660, "686e513fee") &&
+                    Bytes(0xe255cf, "894e50") && Bytes(0xe25947, "c70620094801") &&
+                    Bytes(0xe23235, "8bbba4000000") && Bytes(0xe23250, "8b7704") &&
+                    Bytes(0xe27404, "6a0168e856f604") && Bytes(raw::LayoutFindWindow, "8b491485c97405e9");
+    rocksOk = sceneryOk && Bytes(0xb2efda, "8b450c8b48088b5010") && Bytes(0xb2eff3, "8b088b5018") &&
+              Bytes(0xb2b47a, "6bff4c") && Bytes(0xb2b482, "8d6f04") &&
+              uintptr_t(GetAddress(App::IPropManager, Get)) == Va<uintptr_t>(0x67ddf0) &&
+              uintptr_t(GetAddress(App::Property, GetFloat)) == Va<uintptr_t>(0x40cf10) &&
+              uintptr_t(GetAddress(App::Property, GetBool)) == Va<uintptr_t>(0x407190);
 
     ok &= Slot(raw::CameraManagerVtable, 0x2c, 0x7c6440);
     if (uintptr_t(GetAddress(App::cCameraManager, Update)) != Va<uintptr_t>(0x7c6440))
@@ -455,6 +511,11 @@ bool PlanetReady() {
     return Planet() != nullptr;
 }
 
+float WaterLevel() {
+    auto* pm = Planet();
+    return pm && waterOk ? Va<float(__thiscall*)(cPlanetModel*)>(raw::WaterLevel)(pm) : 0.0f;
+}
+
 bool IsInWater(const vm::V3& p) {
     auto* pm = Planet();
     if (!pm)
@@ -462,6 +523,327 @@ bool IsInWater(const vm::V3& p) {
     Math::Vector3 v = ToSdk(p);
     return Sdk<bool(__thiscall*)(cPlanetModel*, const Math::Vector3*)>(GetAddress(Simulator::cPlanetModel, IsInWater))(
         pm, &v);
+}
+
+Terrain::ITerrain* PlanetTerrain() {
+    auto* pm = Planet();
+    return pm ? *reinterpret_cast<Terrain::ITerrain**>(reinterpret_cast<char*>(pm) + raw::PlanetTerrain) : nullptr;
+}
+
+bool VehicleBody(cVehicle* v, bool transposed, vm::OBox& box) {
+    if (!bodiesOk || !VehicleAlive(v))
+        return false;
+    auto* sp = Spatial(v);
+    if (!sp || !sp->mpModel || !HasSlot(sp, 0x68, 0xad2740))
+        return false;
+    const auto* local = VCall<const Math::BoundingBox*>(sp, 0x68);
+    vm::Box extents{FromSdk(local->lower), FromSdk(local->upper)};
+    if (!vm::ValidBox(extents))
+        return false;
+    vm::M3 rot = vm::ToMatrix(Orientation(sp));
+    box = vm::OrientedBox(extents, transposed ? vm::Transposed(rot) : rot, Position(sp));
+    return vm::ValidOBox(box);
+}
+
+bool VehicleHeightSpan(cVehicle* v, bool transposed, float& bottom, float& top) {
+    vm::OBox body;
+    if (!VehicleBody(v, transposed, body))
+        return false;
+    vm::V3 up = vm::Norm(body.center);
+    float half = 0;
+    for (int i = 0; i < 3; ++i)
+        half += std::fabs(vm::Dot(body.axis[i], up)) * body.half[i];
+    float centre = vm::Dot(body.center, up);
+    bottom = centre - half;
+    top = centre + half;
+    return half > 0.01f;
+}
+
+bool ModelBodyBounds(Graphics::Model* model, vm::Box& box) {
+    if (!sceneryOk || !model || !(model->mFlags & 1))
+        return false;
+    Math::BoundingBox native = model->mDefaultBBox;
+    Transform transform = model->mTransform;
+    if (model->mFlags & 0x80)
+        transform.SetScale(1.0f);
+    Sdk<void(__thiscall*)(Math::BoundingBox*, const Transform*)>(GetAddress(Math::BoundingBox, ApplyTransform))(
+        &native, &transform);
+    box = {FromSdk(native.lower), FromSdk(native.upper)};
+    return vm::ValidBox(box);
+}
+
+bool ModelHasCollisionMesh(Graphics::Model* model) {
+    auto* mesh = *reinterpret_cast<char**>(reinterpret_cast<char*>(model) + 0x94);
+    return mesh && *reinterpret_cast<void**>(mesh + 0xcc);
+}
+
+bool ModelIntersectsBody(Graphics::Model* model, const vm::Box& body) {
+    auto* world = model->mpWorld;
+    if (!world || !HasSlot(world, 0x4c, 0x74a0e0))
+        return false;
+    Graphics::FilterSettings filter;
+    filter.flags = 0;
+    filter.collisionMode = Graphics::CollisionMode::MeshCluster;
+    Math::BoundingBox native(ToSdk(body.lower), ToSdk(body.upper));
+    return world->BoxIntersectsModel(native, model, filter);
+}
+
+bool CellEntersModel(Graphics::Model* model, const vm::Box& cell, const vm::V3& step, const vm::Box& obstacle) {
+    if (!ModelHasCollisionMesh(model))
+        return vm::MovementEntersBox(cell, step, obstacle);
+    if (!ModelIntersectsBody(model, vm::SweptBox(cell, step)))
+        return false;
+    if (!ModelIntersectsBody(model, cell))
+        return true;
+    vm::V3 centre = (obstacle.lower + obstacle.upper) * 0.5f, cellCentre = (cell.lower + cell.upper) * 0.5f;
+    return ModelIntersectsBody(model, vm::ShiftBox(cell, step)) && vm::Dot(step, cellCentre - centre) < 0;
+}
+
+namespace {
+constexpr uint32_t kPlanetAssetGroup = 0x40842000;
+constexpr uint32_t kObstacleBaseCollisionRadius = 0x0254CF89, kObstacleCollisionHeight = 0x0254CF97,
+                   kRockObstacleAllowed = 0x037575E5;
+constexpr size_t kMaxRockBatches = 4096;
+
+struct RockInstance {
+    unsigned char raw[0x14];
+
+    vm::V3 Position() const {
+        const float* p = reinterpret_cast<const float*>(raw + 4);
+        return {p[0], p[1], p[2]};
+    }
+
+    float Scale() const {
+        float s = *reinterpret_cast<const float*>(raw + 0x10);
+        return std::isfinite(s) && s > 0.01f && s < 100.0f ? s : 1.0f;
+    }
+};
+
+struct RockBatch {
+    uint32_t id = 0, model = 0;
+    std::vector<RockInstance> rocks;
+};
+
+struct RockShape {
+    uint32_t id = 0;
+    float radius = 0, height = 0;
+};
+
+std::vector<RockBatch> rockBatches;
+std::vector<RockShape> rockShapes;
+const void* rockPlanet = nullptr;
+
+struct RockMessage {
+    uint32_t count, set, model;
+    const char* instances;
+};
+
+bool ReadRockMessage(const void* msg, RockMessage& out) {
+    __try {
+        auto* m = static_cast<const char*>(msg);
+        out.count = *reinterpret_cast<const uint32_t*>(m);
+        out.instances = *reinterpret_cast<const char* const*>(m + 0x08);
+        out.set = *reinterpret_cast<const uint32_t*>(m + 0x10);
+        out.model = *reinterpret_cast<const uint32_t*>(m + 0x18);
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+bool CopyRocks(const char* instances, uint32_t count, RockInstance* out) {
+    __try {
+        for (uint32_t i = 0; i < count; ++i)
+            std::memcpy(out[i].raw, instances + i * 0x4c, sizeof(out[i].raw));
+        return true;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return false;
+    }
+}
+
+RockShape RockShapeFor(uint32_t id) {
+    for (const auto& shape : rockShapes)
+        if (shape.id == id)
+            return shape;
+    RockShape shape;
+    shape.id = id;
+    auto* props = Sdk<App::IPropManager* (*)()>(GetAddress(App::IPropManager, Get))();
+    PropertyListPtr list;
+    bool obstacle = true;
+    if (props && props->GetPropertyList(id, kPlanetAssetGroup, list) && list) {
+        auto getBool = Sdk<bool (*)(const App::PropertyList*, uint32_t, bool&)>(GetAddress(App::Property, GetBool));
+        auto getFloat = Sdk<bool (*)(const App::PropertyList*, uint32_t, float&)>(GetAddress(App::Property, GetFloat));
+        getBool(list.get(), kRockObstacleAllowed, obstacle);
+        if (obstacle && getFloat(list.get(), kObstacleBaseCollisionRadius, shape.radius) &&
+            !getFloat(list.get(), kObstacleCollisionHeight, shape.height))
+            shape.height = shape.radius * 2;
+    }
+    if (!(shape.radius > 0 && shape.radius < 200 && shape.height > 0 && shape.height < 500))
+        shape.radius = shape.height = 0;
+    rockShapes.push_back(shape);
+    return shape;
+}
+
+bool PlanetRocksBlock(const vm::OBox& body, const vm::V3& step) {
+    if (rockBatches.empty() || rockPlanet != static_cast<const void*>(Planet()))
+        return false;
+    float reach = vm::OBoxRadius(body) + vm::Len(step);
+    for (const auto& batch : rockBatches) {
+        RockShape shape;
+        bool known = false;
+        for (const RockInstance& rock : batch.rocks) {
+            vm::V3 at = rock.Position();
+            if (vm::Len(at - body.center) > reach + 40.0f)
+                continue;
+            if (!known) {
+                shape = RockShapeFor(batch.model);
+                known = true;
+            }
+            if (!(shape.radius > 0))
+                break;
+            float radius = shape.radius * rock.Scale(), height = shape.height * rock.Scale();
+            vm::V3 up = vm::Norm(at);
+            if (vm::Len(vm::Flatten(at - body.center, up)) > reach + radius ||
+                !vm::MovementEntersCylinder(body, step, at, up, radius, height))
+                continue;
+            return true;
+        }
+    }
+    return false;
+}
+}
+
+void OnPlanetRocks(void* msg) {
+    RockMessage m{};
+    if (!rocksOk || !ReadRockMessage(msg, m) || m.count > 4096)
+        return;
+    const void* planet = Planet();
+    if (planet != rockPlanet) {
+        rockBatches.clear();
+        rockPlanet = planet;
+    }
+    auto found = rockBatches.end();
+    for (auto it = rockBatches.begin(); it != rockBatches.end(); ++it)
+        if (it->id == m.set)
+            found = it;
+    if (!m.instances || !m.count) {
+        if (found != rockBatches.end())
+            rockBatches.erase(found);
+        return;
+    }
+    RockBatch batch;
+    batch.id = m.set;
+    batch.model = m.model;
+    batch.rocks.resize(m.count);
+    if (!CopyRocks(m.instances, m.count, batch.rocks.data()))
+        return;
+    if (found != rockBatches.end()) {
+        *found = std::move(batch);
+        return;
+    }
+    if (rockBatches.size() >= kMaxRockBatches)
+        rockBatches.erase(rockBatches.begin());
+    rockBatches.push_back(std::move(batch));
+}
+
+bool SceneryStepBlocked(cVehicle* controlled, const vm::V3& from, const vm::V3& to, bool transposed) {
+    vm::OBox body;
+    if (!sceneryOk || !vm::Finite(from) || !vm::Finite(to) || !VehicleBody(controlled, transposed, body))
+        return false;
+    vm::V3 step = to - from;
+    if (vm::Dot(step, step) < 1e-12f)
+        return false;
+    body = vm::ShiftOBox(body, from - Position(Spatial(controlled)));
+    vm::OBox cells[27];
+    int cellCount = vm::SplitOBox(body, cells, 27);
+    vm::Box whole = vm::OBoxBounds(body), sweep = vm::SweptBox(whole, step);
+    auto* terrain = PlanetTerrain();
+    ModelPtr* models = nullptr;
+    size_t count = terrain && HasSlot(terrain, 0xb0, 0xf97630) ? terrain->GetModels(models) : 0;
+    bool blocked = false;
+    for (size_t i = 0; models && i < count && !blocked; ++i) {
+        auto* model = models[i].get();
+        vm::Box obstacle;
+        if (!ModelBodyBounds(model, obstacle) || !vm::BoxesOverlap(sweep, obstacle))
+            continue;
+        if (ModelHasCollisionMesh(model) && !ModelIntersectsBody(model, sweep))
+            continue;
+        for (int c = 0; c < cellCount && !blocked; ++c)
+            blocked = CellEntersModel(model, vm::OBoxBounds(cells[c]), step, obstacle);
+    }
+    return blocked || PlanetRocksBlock(body, step);
+}
+
+bool GetVehicles(cVehicle**& begin, cVehicle**& end) {
+    begin = end = nullptr;
+    if (!vehiclesOk)
+        return false;
+    auto* nouns = NounManager();
+    if (!nouns)
+        return false;
+    auto* list = Va<char*(__thiscall*)(void*, void*, void*, void*, void*, uint32_t)>(raw::NounGetData)(
+        nouns, Va<void*>(0xcd7e90), Va<void*>(0xd3d3d0), Va<void*>(0xae7250), Va<void*>(0xb1e440), 0x18C6DE8);
+    if (!list)
+        return false;
+    begin = *reinterpret_cast<cVehicle***>(list + 4);
+    end = *reinterpret_cast<cVehicle***>(list + 8);
+    return begin && end && begin < end;
+}
+
+bool VehicleStepBlocked(cVehicle* controlled, const vm::V3& from, const vm::V3& to, bool transposed,
+                        cVehicle** hit) {
+    if (hit)
+        *hit = nullptr;
+    vm::OBox body;
+    if (!vehiclesOk || !vm::Finite(from) || !vm::Finite(to) || !VehicleBody(controlled, transposed, body))
+        return false;
+    cVehicle** begin = nullptr;
+    cVehicle** end = nullptr;
+    if (!GetVehicles(begin, end))
+        return false;
+    vm::V3 step = to - from;
+    body = vm::ShiftOBox(body, from - Position(Spatial(controlled)));
+    float reach = vm::OBoxRadius(body) + vm::Len(step);
+    for (auto** it = begin; it && it < end; ++it) {
+        vm::OBox other;
+        if (*it == controlled || !VehicleBody(*it, transposed, other) ||
+            vm::Len(other.center - body.center) > reach + vm::OBoxRadius(other))
+            continue;
+        if (vm::MovementEntersOBox(body, step, other)) {
+            if (hit)
+                *hit = *it;
+            return true;
+        }
+    }
+    return false;
+}
+
+cVehicle* ForeignVehicleStepBlocked(cVehicle* controlled, const void* object, const vm::V3& to, bool transposed,
+                                    vm::V3& allowed) {
+    if (!bodiesOk || !object || !vm::Finite(to) || !VehicleAlive(controlled))
+        return nullptr;
+    auto* spatial = static_cast<cSpatialObject*>(const_cast<void*>(object));
+    if (spatial == Spatial(controlled) || !HasSlot(spatial, 0xb8, 0xca7f90))
+        return nullptr;
+    auto* other = static_cast<cVehicle*>(spatial->Cast(cVehicle::TYPE));
+    vm::OBox obstacle, moving;
+    if (!VehicleBody(controlled, transposed, obstacle) || !VehicleBody(other, transposed, moving))
+        return nullptr;
+    vm::V3 from = Position(spatial);
+    if (!vm::Finite(from) || vm::Len(from) < vm::Len(Position(Spatial(controlled))) * 0.5f)
+        return nullptr;
+    if (!vm::MovementEntersOBox(moving, to - from, obstacle))
+        return nullptr;
+    allowed = from + vm::AllowedStep(moving, to - from, obstacle, vm::Norm(from));
+    return other;
+}
+
+vm::V3 ContactPoint(cVehicle* a, cVehicle* b, bool transposed) {
+    vm::OBox ba, bb;
+    if (!VehicleBody(a, transposed, ba) || !VehicleBody(b, transposed, bb))
+        return (Position(Spatial(a)) + Position(Spatial(b))) * 0.5f;
+    vm::V3 onB = vm::ClosestPoint(bb, ba.center), onA = vm::ClosestPoint(ba, onB);
+    return (onA + onB) * 0.5f;
 }
 
 float HeightAt(const vm::V3& p) {
@@ -532,8 +914,6 @@ bool OpenEconomicMenu(cGameData* target, const void* cityMenu) {
     auto* sp = static_cast<cSpatialObject*>(Cast(target, 0x1186577));
     if (!economicMenuOk || !input || !sp || !HasSlot(input, 0x30, 0xb1c480))
         return false;
-    // UIMachineCityCiv accepts MenuItem only in CISMenuDisplayed. Showing the
-    // pie directly skips that transition and leaves its buttons without actions.
     const int flags = int(UIStateMachineObjectFlags::NPCOwned) | int(UIStateMachineObjectFlags::IsNotSelected) |
                       int(UIStateMachineObjectFlags::SomeObjectsAreSelected) |
                       int(UIStateMachineObjectFlags::ObjectIsNotShowingMenu);
@@ -572,6 +952,11 @@ bool Act(cVehicle* v, cGameData* target, int key) {
 void ClearOrders(cVehicle* v) {
     if (v)
         Va<void(__thiscall*)(cVehicle*)>(raw::ClearOrders)(v);
+}
+
+bool HasOrders(cVehicle* v) {
+    auto* raw = reinterpret_cast<char*>(v);
+    return v && *reinterpret_cast<char**>(raw + 0xb68) < *reinterpret_cast<char**>(raw + 0xb6c);
 }
 
 cGameData* CurrentOrderTarget(cVehicle* v) {
@@ -945,12 +1330,99 @@ bool CityDefenseless(cCity* city) {
     return buildings < 2 && turrets < 1;
 }
 
-bool AttackCity(cVehicle* v, cCity* city) {
-    if (!cityAttackOk || !v || !city || !VehicleAlive(v))
+bool CityConvertible(cCity* city) {
+    return cityConvertOk && faithAttackOk && city && !city->cGameData::mbIsDestroyed && city->mPoliticalID != uint32_t(-1) &&
+           city->mPoliticalID != PlayerPoliticalID();
+}
+
+cGameData* FaithTarget(cVehicle* v, cGameData* target) {
+    if (!faithAttackOk || !v || v->mPurpose != kVehicleCultural || !target || target->mbIsDestroyed)
+        return nullptr;
+    auto* city = static_cast<cCity*>(Cast(target, cCity::TYPE));
+    if (!city && IsCityHall(target))
+        city = CityOf(target);
+    if (!city)
+        return target;
+    if (!CityConvertible(city))
+        return nullptr;
+    size_t first = v->mLocomotion == kVehicleWater ? 3 : 0;
+    size_t end = v->mLocomotion == kVehicleWater ? 4 : 3;
+    if (city->mCulturalTargets.size() < end)
+        return nullptr;
+    for (size_t i = first; i < end; ++i)
+        if (!city->mCulturalTargets[i])
+            return nullptr;
+    auto* chosen = Va<cCulturalTarget*(__thiscall*)(cCity*, cVehicle*)>(raw::ChooseCultureTarget)(city, v);
+    return chosen && !chosen->cGameData::mbIsDestroyed ? static_cast<cGameData*>(chosen) : nullptr;
+}
+
+bool FaithWeaponReady(cVehicle* v) {
+    if (!faithAttackOk || !v || v->mPurpose != kVehicleCultural)
         return false;
-    Va<void(__thiscall*)(cVehicle*, cGameData*, int, int)>(raw::AddOrder)(v, city, 2, 1);
+    auto* combatant = static_cast<cCombatant*>(v);
+    return HasSlot(combatant, 0x44, 0xc9e920) && VCall<bool>(combatant, 0x44, 0);
+}
+
+cCombatant* FaithCombatTarget(cVehicle* v, cGameData* target) {
+    if (!faithAttackOk || !v || !VehicleAlive(v) || !origVehSetTarget)
+        return nullptr;
+    target = FaithTarget(v, target);
+    auto* other = target ? static_cast<cCombatant*>(Cast(target, cCombatant::TYPE)) : nullptr;
+    auto* self = static_cast<cCombatant*>(v);
+    if (!other || !Va<bool(__cdecl*)(cCombatant*, cCombatant*)>(raw::ValidCombatTarget)(self, other) ||
+        InWeaponRange(v, target) != 1)
+        return nullptr;
+    return other;
+}
+
+bool AimFaithWeapon(cVehicle* v, cGameData* target) {
+    auto* other = FaithCombatTarget(v, target);
+    if (!other)
+        return false;
+    auto* self = static_cast<cCombatant*>(v);
+    if (self->mpTarget.get() != other)
+        reinterpret_cast<void(__thiscall*)(cCombatant*, cCombatant*)>(origVehSetTarget)(self, other);
+    return true;
+}
+
+bool AttackFaith(cVehicle* v, cGameData* target) {
+    if (!target || IsCityHall(target) || Cast(target, cCity::TYPE) ||
+        !FaithCombatTarget(v, target))
+        return false;
+    Va<void(__thiscall*)(cVehicle*, cGameData*, int, int)>(raw::AddOrder)(v, target, 1, 1);
     Va<void(__thiscall*)(cVehicle*, int)>(0xc9efc0)(v, 0);
-    return CurrentOrderTarget(v) == city;
+    if (CurrentOrderTarget(v) == target && AimFaithWeapon(v, target))
+        return true;
+    if (CurrentOrderTarget(v) == target)
+        ClearOrders(v);
+    StopFaithWeapon(v);
+    return false;
+}
+
+void StopFaithWeapon(cVehicle* v) {
+    if (!faithAttackOk || !v || v->mPurpose != kVehicleCultural)
+        return;
+    if (origVehSetTarget)
+        reinterpret_cast<void(__thiscall*)(cCombatant*, cCombatant*)>(origVehSetTarget)(static_cast<cCombatant*>(v), nullptr);
+    Va<int(__thiscall*)(cVehicle*)>(raw::StopVehicleWeapons)(v);
+}
+
+bool AttackCity(cVehicle* v, cCity* city) {
+    if (!v || !city || !VehicleAlive(v))
+        return false;
+    int kind = 2;
+    cGameData* target = city;
+    if (v->mPurpose == kVehicleCultural) {
+        target = FaithTarget(v, city);
+        if (!CityConvertible(city) || !target)
+            return false;
+        kind = kOrderConvertCity;
+    } else if (v->mPurpose != kVehicleMilitary || !CityDefenseless(city)) {
+        return false;
+    }
+    Va<void(__thiscall*)(cVehicle*, cGameData*, int, int)>(raw::AddOrder)(v, target, kind, 1);
+    Va<void(__thiscall*)(cVehicle*, int)>(0xc9efc0)(v, 0);
+    return CurrentOrderTarget(v) == target;
 }
 
 bool CityEditorOpen() {
@@ -1010,6 +1482,40 @@ void HideCityRollover() {
     auto* w = CityRolloverRoot();
     if (w && w->IsVisible())
         w->SetFlag(UTFWin::kWinFlagVisible, false);
+}
+
+namespace {
+UTFWin::IWindow* VehicleListFrame(cVehicle* v) {
+    int purpose = v ? int(v->mPurpose) : -1;
+    if (purpose == 4)
+        purpose = 0;
+    if (!vehicleListOk || purpose < 0 || purpose > 3)
+        return nullptr;
+    char* posse = nullptr;
+    CivMinimap(&posse);
+    auto* panel = posse ? *reinterpret_cast<char**>(posse + 0x6c + purpose * 4) : nullptr;
+    if (!panel)
+        return nullptr;
+    void* key = Cast(v, 0xee3f516e);
+    auto* begin = *reinterpret_cast<char**>(panel + 0xa4);
+    auto* end = *reinterpret_cast<char**>(panel + 0xa8);
+    for (char* entry = begin; key && entry && entry < end; entry += 8) {
+        char* item = *reinterpret_cast<char**>(entry + 4);
+        if (!item || *reinterpret_cast<uintptr_t*>(item) != Va<uintptr_t>(raw::PosseItemCivVtable) ||
+            *reinterpret_cast<void**>(item + 0x50) != key)
+            continue;
+        return Va<UTFWin::IWindow*(__thiscall*)(void*, uint32_t, bool)>(raw::LayoutFindWindow)(item + 0x7c,
+                                                                                               0x4f656e8, true);
+    }
+    return nullptr;
+}
+}
+
+void TintVehicleListFrame(cVehicle* v, uint32_t color) {
+    auto* frame = VehicleListFrame(v);
+    Math::Color want(color ? color : 0xffffffff);
+    if (frame && uint32_t(frame->GetShadeColor()) != want.value)
+        frame->SetShadeColor(want);
 }
 
 bool OverCityRollover() {
@@ -1073,6 +1579,201 @@ void WriteViewer(App::cViewer* viewer, const CamXf& xf) {
         for (int j = 0; j < 3; ++j)
             t.rot[i][j] = xf.rot.m[i][j];
     Sdk<void(__thiscall*)(App::cViewer*, const RawTransform*)>(GetAddress(App::cViewer, SetViewTransform))(viewer, &t);
+}
+
+bool VehicleDamage(cVehicle* v, float fraction, uint32_t attacker, const vm::V3& at, bool lethal, int type) {
+    if (!collisionOk || !VehicleAlive(v) || !vm::Finite(at))
+        return false;
+    auto* self = static_cast<cCombatant*>(v);
+    if (!HasSlot(self, 0x18, raw::VehicleTakeDamage) || self->mbInvincible)
+        return false;
+    float amount = self->mMaxHealthPoints * fraction;
+    if (!lethal)
+        amount = std::fmin(amount, self->mHealthPoints - 1.0f);
+    if (!(amount > 0) || !std::isfinite(amount))
+        return false;
+    Math::Vector3 point = ToSdk(at);
+    VCall<int>(self, 0x18, amount, attacker, type, static_cast<const Math::Vector3*>(&point),
+               static_cast<cCombatant*>(nullptr));
+    return true;
+}
+
+void PlayTakeFire(cVehicle* v) {
+    int purpose = v ? int(v->mPurpose) : -1;
+    if (!takeFireOk || purpose < kVehicleMilitary || purpose > kVehicleEconomic)
+        return;
+    int track = Va<int (*)()>(raw::NewAudioTrack)();
+    Sdk<void (*)(uint32_t, int)>(GetAddress(Audio, PlayAudio))(Va<const uint32_t*>(raw::TakeFireVoices)[purpose],
+                                                                track);
+}
+
+namespace {
+float Standing(void* relations, uint32_t a, uint32_t b) {
+    void* map = Va<void*(__thiscall*)(void*, uint32_t, uint32_t)>(raw::RelationshipMap)(relations, a, b);
+    auto* data =
+        Va<const float*(__thiscall*)(void*, void*, uint32_t, uint32_t)>(raw::RelationshipData)(relations, map, a, b);
+    return data && std::isfinite(*data) ? *data : 0.0f;
+}
+}
+
+bool HostileToPlayer(cVehicle* v, cVehicle* player) {
+    uint32_t me = PlayerPoliticalID(), them = v ? uint32_t(v->cGameData::mPoliticalID) : uint32_t(-1);
+    if (me == uint32_t(-1) || them == uint32_t(-1) || them == me)
+        return false;
+    if (player && static_cast<cCombatant*>(v)->mpTarget.get() == static_cast<cCombatant*>(player))
+        return true;
+    void* relations = relationsOk ? Sdk<void* (*)()>(GetAddress(Simulator::cRelationshipManager, Get))() : nullptr;
+    if (!relations)
+        return false;
+    if (Va<bool(__thiscall*)(void*, uint32_t, uint32_t)>(raw::IsAtWar)(relations, me, them))
+        return true;
+    return std::fmin(Standing(relations, them, me), Standing(relations, me, them)) < 0;
+}
+
+bool Retreat(cVehicle* v, const vm::V3& threat, float distance) {
+    if (!retreatOk || !VehicleAlive(v) || !vm::Finite(threat))
+        return false;
+    auto* sp = Spatial(v);
+    vm::V3 pos = Position(sp), up = vm::Norm(pos);
+    vm::V3 away = vm::Norm(vm::Flatten(pos - threat, up), vm::Norm(vm::Flatten(Direction(sp), up), {1, 0, 0}));
+    auto addOrderAt = reinterpret_cast<void(__thiscall*)(cVehicle*, float, float, float, int)>(
+        origAddOrderAt ? origAddOrderAt : Va<void*>(raw::AddOrderAt));
+    const float turns[] = {0.0f, 0.6f, -0.6f, 1.2f, -1.2f, 1.8f, -1.8f};
+    for (float turn : turns) {
+        vm::V3 target = ToSurface(pos + vm::Rotate(away, up, turn) * distance);
+        bool water = IsInWater(target);
+        if (!vm::Finite(target) || (v->mLocomotion == kVehicleLand && water) ||
+            (v->mLocomotion == kVehicleWater && !water))
+            continue;
+        StopMovement(sp);
+        addOrderAt(v, target.x, target.y, target.z, 0);
+        Va<void(__thiscall*)(cVehicle*, int)>(raw::StartOrders)(v, 0);
+        return true;
+    }
+    return false;
+}
+
+namespace {
+struct Spark {
+    void* effect = nullptr;
+    DWORD stop = 0;
+};
+
+Spark sparks[8];
+
+void StopSpark(Spark& s) {
+    VCall<int>(s.effect, 0x0c, 0);
+    VCall<int>(s.effect, 0x04);
+    s = Spark{};
+}
+}
+
+void CollisionSparks(const vm::V3& at, const vm::V3& away, float scale) {
+    void* manager = effectsOk ? Sdk<void* (*)()>(GetAddress(Swarm::IEffectsManager, Get))() : nullptr;
+    if (!manager || !vm::Finite(at) || !VCall<bool>(manager, 0x28, kCollisionEffect, 0u))
+        return;
+    void* effect = nullptr;
+    if (!VCall<bool>(manager, 0x2c, kCollisionEffect, 0u, &effect) || !effect)
+        return;
+    vm::V3 up = vm::Norm(at), dir = vm::Norm(vm::Flatten(away, up), {0, 1, 0});
+    vm::V3 origin = at + dir * (6.0f * scale);
+    RawTransform t{};
+    t.flags = 7;
+    t.count = 1;
+    t.offset[0] = origin.x;
+    t.offset[1] = origin.y;
+    t.offset[2] = origin.z;
+    t.scale = scale;
+    vm::M3 rot = vm::M3::FromRows(vm::Norm(vm::Cross(dir, up)), dir, up);
+    for (int i = 0; i < 3; ++i)
+        for (int j = 0; j < 3; ++j)
+            t.rot[i][j] = rot.m[i][j];
+    VCall<void>(effect, 0x18, static_cast<const RawTransform*>(&t));
+    const float silent = 0.0f;
+    VCall<bool>(effect, 0x44, int(Swarm::kParamVolume), &silent, 1);
+    VCall<void>(effect, 0x08, 0);
+    Spark* slot = nullptr;
+    for (auto& s : sparks)
+        if (!s.effect && !slot)
+            slot = &s;
+    if (!slot) {
+        slot = &sparks[0];
+        for (auto& s : sparks)
+            if (int(s.stop - slot->stop) < 0)
+                slot = &s;
+        StopSpark(*slot);
+    }
+    slot->effect = effect;
+    slot->stop = GetTickCount() + 300;
+}
+
+namespace {
+struct Scrape {
+    const void* key = nullptr;
+    int track = 0;
+    DWORD seen = 0;
+};
+
+Scrape scrapes[4];
+}
+
+void CollisionScrape(const void* key, const vm::V3& at) {
+    if (!scrapeOk || !key || !vm::Finite(at))
+        return;
+    DWORD now = GetTickCount();
+    Scrape* slot = nullptr;
+    for (auto& s : scrapes)
+        if (s.key == key)
+            slot = &s;
+    if (slot) {
+        slot->seen = now;
+        return;
+    }
+    for (auto& s : scrapes)
+        if (!s.key && !slot)
+            slot = &s;
+    if (!slot)
+        return;
+    int track = Va<int (*)()>(raw::NewAudioTrack)();
+    if (!track)
+        return;
+    Va<void (*)(uint32_t, int, float, float, float)>(raw::PlayAudioAt)(kScrapeSound, track, at.x, at.y, at.z);
+    *slot = {key, track, now};
+}
+
+void UpdateCollisionSparks() {
+    DWORD now = GetTickCount();
+    for (auto& s : sparks)
+        if (s.effect && int(now - s.stop) >= 0)
+            StopSpark(s);
+    for (auto& s : scrapes)
+        if (s.key && now - s.seen > 350) {
+            Va<void (*)(int, int)>(raw::StopAudio)(s.track, 0);
+            s = Scrape{};
+        }
+}
+
+bool MoveAnimationUsable() {
+    return moveAnimOk;
+}
+
+bool ContinuousMoveAnimation(cVehicle* v) {
+    return moveAnimOk && v && Va<bool(__thiscall*)(cVehicle*)>(raw::ContinuousMoveAnimation)(v);
+}
+
+float MoveAnimationThreshold() {
+    return *Va<const float*>(raw::MoveAnimationThreshold);
+}
+
+const void* MoveAnimationOwner(const void* state) {
+    return *reinterpret_cast<const void* const*>(static_cast<const char*>(state) - 0xb0 + 0x0c);
+}
+
+void PauseMoveAnimation(void* world, void* model) {
+    auto* m = static_cast<Graphics::Model*>(model);
+    if (!world || !m || !(m->mFlags & (1 << 14)) || (m->mFlags & (1 << 18)))
+        return;
+    VCall<void>(world, 0x7c, m, 0.0f);
 }
 
 bool SetNativeCursor(uint32_t id) {

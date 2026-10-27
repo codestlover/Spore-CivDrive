@@ -21,7 +21,9 @@ void OnAppUpdate();
 
 void OnCivMessage(uint32_t id, void* msg);
 bool BlockVehicleWrite(const void* spatial);
+bool LimitOtherVehicleMove(const void* spatial, const float* position, float allowed[3]);
 bool VelocityFor(const void* locomotive, float out[3]);
+bool MoveAnimationSpeed(const void* state, const void* model, float standard, float& out);
 uint32_t FilterCursor(uint32_t id);
 bool RefuseOrder(const void* vehicle, const void* target, int kind, uint32_t callerVa);
 bool RefuseCombatTarget(const void* combatant, const void* target);
