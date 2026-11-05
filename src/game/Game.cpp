@@ -77,6 +77,9 @@ static_assert(offsetof(cStar, mpSolarSystem) == 0x40, "cStar::mpSolarSystem");
 static_assert(offsetof(cSolarSystem, mPlanets) == 0x10, "cSolarSystem::mPlanets");
 static_assert(offsetof(cSolarSystem, field_40) == 0x40, "cSolarSystem sky proxies");
 static_assert(offsetof(Graphics::Model, mpOwner) == 0x64, "Graphics::Model::mpOwner");
+static_assert(offsetof(Graphics::Model, mTransform) == 0x8, "Graphics::Model::mTransform");
+static_assert(offsetof(Graphics::Model, mDefaultBoundingRadius) == 0x6c, "Graphics::Model::mDefaultBoundingRadius");
+static_assert(offsetof(Graphics::Model, mDefaultBBox) == 0x70, "Graphics::Model::mDefaultBBox");
 static_assert(offsetof(cPlanet, mpPlanetRecord) == 0x13c, "cPlanet::mpPlanetRecord");
 static_assert(offsetof(cPlanet, mGraphicRepresentationMode) == 0x158, "cPlanet::mGraphicRepresentationMode");
 static_assert(offsetof(cPlanet, mPlanetScale) == 0x184, "cPlanet::mPlanetScale");
@@ -551,7 +554,20 @@ bool RayHitsSphere(const vm::V3& origin, const vm::V3& dir, float radius) {
 struct SkyScene {
     cPlanet* active = nullptr;
     cSolarSystem* system = nullptr;
+    vm::V3 origin, dir;
 } sky;
+
+bool RayHitsBody(Graphics::Model* model) {
+    const auto* t = reinterpret_cast<const float*>(reinterpret_cast<const char*>(model) + 8);
+    vm::V3 lower = FromSdk(model->mDefaultBBox.lower), upper = FromSdk(model->mDefaultBBox.upper);
+    float half = std::fmax(std::fmax(upper.x - lower.x, upper.y - lower.y), upper.z - lower.z) * 0.5f;
+    if (!(half > 0) || !std::isfinite(half))
+        half = model->mDefaultBoundingRadius / std::sqrt(3.0f);
+    float radius = half * std::fabs(t[4]);
+    vm::V3 d = vm::V3{t[1], t[2], t[3]} - sky.origin;
+    float along = vm::Dot(d, sky.dir);
+    return vm::Finite(d) && std::isfinite(radius) && along > 0 && vm::Dot(d, d) - along * along <= radius * radius;
+}
 
 cPlanet* SkyPlanetOf(Graphics::Model* model) {
     if (!model || !(model->mFlags & Graphics::kModelFlagVisible) || !model->mpOwner)
@@ -568,18 +584,21 @@ cPlanet* SkyPlanetOf(Graphics::Model* model) {
 }
 
 bool __cdecl SkyModelFilter(Graphics::Model* model) {
-    return SkyPlanetOf(model) != nullptr;
+    return SkyPlanetOf(model) && RayHitsBody(model);
 }
 
 const char16_t* PickSkyModel(Graphics::IModelWorld* world, const vm::V3& origin, const vm::V3& dir) {
+    sky.origin = origin;
+    sky.dir = dir;
     Math::Vector3 a = ToSdk(origin), b = ToSdk(origin + dir * kSkyRayLength);
     float factor = 0;
     Graphics::FilterSettings filter;
     filter.flags = 0;
     filter.collisionMode = Graphics::CollisionMode::BoundingSphere;
     filter.filterFunction = &SkyModelFilter;
-    cPlanet* p = SkyPlanetOf(VCall<Graphics::Model*>(world, 0x28, static_cast<const Math::Vector3*>(&a),
-                                                     static_cast<const Math::Vector3*>(&b), &factor, &filter));
+    auto* model = VCall<Graphics::Model*>(world, 0x28, static_cast<const Math::Vector3*>(&a),
+                                          static_cast<const Math::Vector3*>(&b), &factor, &filter);
+    cPlanet* p = model && RayHitsBody(model) ? SkyPlanetOf(model) : nullptr;
     return p ? p->mpPlanetRecord->mName.c_str() : nullptr;
 }
 
