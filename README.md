@@ -5,7 +5,7 @@ Third-person control of your own vehicles in the **Civilization stage** of *Spor
 your land vehicles, ships or aircraft and drive it yourself: the camera sits behind it, WASD drives, the mouse aims
 and fires. Everything the vehicle does still goes through the game's own rules, ranges and cursors.
 
-Current version: **1.0.13**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
+Current version: **1.0.14**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
 
 ## Controls
 
@@ -29,6 +29,8 @@ Current version: **1.0.13**. Download `CivDrive.sporemod` from the [Releases](..
 | Raid a tribe | Nothing to aim at: **drive into a tribe hut**. The game gets the raid order at that moment (let go of WASD on the hut and the game drives the last metres) |
 | Capture a city | Destroy the city's buildings and turrets first (click them as usual). Then, with a military vehicle, hover the enemy city hall: the attack cursor appears. A click gives the game's own city attack order, the one the AI uses: the vehicle fires at the city hall from its native weapon range, and when the hall falls the city is captured, with the game's own cinematic. While buildings or turrets are left, a click on the city hall does nothing, as in normal play |
 | Switch vehicles | **Double-click another of your vehicles** on the planet or in the list: the camera flies over and the control moves to it. A click on your own vehicle is never an attack |
+| Name of a planet in the sky | Hover a planet or moon in the sky: its name appears in the game's own tooltip. The whole visible disc of the planet answers |
+| Number keys | Do nothing while you drive, so a stray key does not jump the camera away. They work as usual again in the strategic view |
 | Back to the strategic view | **Double-tap Shift**. The view flies back to the strategic camera, which stays where it was |
 | Game menu | **Esc** ends the control at once (the strategic camera jumps over the vehicle) and opens the game's menu |
 
@@ -115,8 +117,12 @@ Mods that hook the same game functions work alongside it, in any load order. For
 [Civ Challenge](https://github.com/codestlover/Spore-CivChallenge) also hooks vehicle orders and the start of a spice
 derrick: CivDrive puts its hook in front of the other mod's, the other mod does the same, and both run. Orders that
 you give through the game's interface (the city capture button) are recognised even when another mod's hook sits in
-front of CivDrive's. When another mod refuses a raid (Civ Challenge's *No land raids* rule), driving into a hut plays
-one refusal, and CivDrive does not try that hut again until the vehicle has driven away.
+front of CivDrive's. Mods that replace the game's own functions of a vehicle in its function table are accepted as
+well ([Beatuy!SpaceStage](https://github.com/codestlover/Spore-BeatuySpaceStage), for example, replaces the vehicle's
+damage, weapon range and target functions): CivDrive calls through them, so collision and water damage, native ranges
+and the target rules keep working next to them. When another mod refuses a raid (Civ Challenge's *No land raids*
+rule), driving into a hut plays one refusal, and CivDrive does not try that hut again until the vehicle has driven
+away.
 
 ## Building from source (Linux)
 
