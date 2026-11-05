@@ -86,6 +86,8 @@ constexpr uint32_t SkyPosition = 0xc71d90;
 constexpr uint32_t SkyObjectType = 0x1034690;
 constexpr uint32_t SkyObjectScale = 0x1034640;
 constexpr uint32_t ShowTooltip = 0x8357c0;
+constexpr uint32_t QuatToMatrix = 0x59c190;
+constexpr uint32_t SkyFrameScale = 0x1578c18;
 constexpr uint32_t TooltipManagerPtr = 0x164f328;
 }
 
@@ -96,6 +98,7 @@ constexpr uint32_t kTooltipLayoutType = 0x510a95b;
 constexpr uint32_t kTooltipLayoutGroup = 0x40464100;
 constexpr float kSkyMinAngle = 0.012f;
 constexpr float kSkySlack = 1.1f;
+constexpr float kSkyRayLength = 100000.0f;
 
 enum : uint32_t {
     kSlotKeyDown = 0x24,

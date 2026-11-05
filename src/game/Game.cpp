@@ -75,6 +75,8 @@ static_assert(offsetof(SpacePlayerData, mpActiveStar) == 0x8, "SpacePlayerData::
 static_assert(offsetof(SpacePlayerData, mCurrentContext) == 0x10, "SpacePlayerData::mCurrentContext");
 static_assert(offsetof(cStar, mpSolarSystem) == 0x40, "cStar::mpSolarSystem");
 static_assert(offsetof(cSolarSystem, mPlanets) == 0x10, "cSolarSystem::mPlanets");
+static_assert(offsetof(cSolarSystem, field_40) == 0x40, "cSolarSystem sky proxies");
+static_assert(offsetof(Graphics::Model, mpOwner) == 0x64, "Graphics::Model::mpOwner");
 static_assert(offsetof(cPlanet, mpPlanetRecord) == 0x13c, "cPlanet::mpPlanetRecord");
 static_assert(offsetof(cPlanet, mGraphicRepresentationMode) == 0x158, "cPlanet::mGraphicRepresentationMode");
 static_assert(offsetof(cPlanet, mPlanetScale) == 0x184, "cPlanet::mPlanetScale");
@@ -377,7 +379,9 @@ bool Verify() {
             uintptr_t(GetAddress(App::cViewer, GetCameraToMouse)) == Va<uintptr_t>(0x7c49d0) &&
             Bytes(raw::SkyPosition, "83ec6853558be9e874f33a008bd83bdd") && Bytes(0x1021110, "5133d2891424a18cda6d01") &&
             Bytes(raw::SkyObjectType, "568b7424088bcee844d0c3ff84c07407") &&
-            Bytes(raw::SkyObjectScale, "807c240c008b4c2404741cf30f10048d30f36d01");
+            Bytes(raw::SkyObjectScale, "807c240c008b4c2404741cf30f10048d30f36d01") &&
+            Bytes(raw::QuatToMatrix, "83ec30568b44243cf30f1000f30f1070") &&
+            Slot(raw::GameViewManagerVtable, 0x70, 0xb35c70) && Bytes(0xb35c70, "8b81e4000000c3");
     nameTipOk = Bytes(raw::ShowTooltip, "8a44240483ec205356578bf184c07508") &&
                 Bytes(0x835b33, "8b3d28f364018bf185ff740583c7f8eb") && uintptr_t(GetAddress(ResourceKey, Parse)) != 0;
     scrapeOk = soundOk && Bytes(raw::PlayAudioAt, "56e8eae64a008bf085f60f8480000000") &&
@@ -544,6 +548,63 @@ bool RayHitsSphere(const vm::V3& origin, const vm::V3& dir, float radius) {
     return c <= 0 || (b < 0 && b * b - c >= 0);
 }
 
+struct SkyScene {
+    cPlanet* active = nullptr;
+    cSolarSystem* system = nullptr;
+} sky;
+
+cPlanet* SkyPlanetOf(Graphics::Model* model) {
+    if (!model || !(model->mFlags & Graphics::kModelFlagVisible) || !model->mpOwner)
+        return nullptr;
+    auto* p = static_cast<cPlanet*>(model->mpOwner->Cast(cPlanet::TYPE));
+    if (!p || p == sky.active || int(p->mGraphicRepresentationMode) != 2 || !p->mpPlanetRecord ||
+        p->mpPlanetRecord->mName.empty())
+        return nullptr;
+    if (sky.system)
+        for (auto& proxy : sky.system->field_40)
+            if (proxy.get() == model)
+                return nullptr;
+    return p;
+}
+
+bool __cdecl SkyModelFilter(Graphics::Model* model) {
+    return SkyPlanetOf(model) != nullptr;
+}
+
+const char16_t* PickSkyModel(Graphics::IModelWorld* world, const vm::V3& origin, const vm::V3& dir) {
+    Math::Vector3 a = ToSdk(origin), b = ToSdk(origin + dir * kSkyRayLength);
+    float factor = 0;
+    Graphics::FilterSettings filter;
+    filter.flags = 0;
+    filter.collisionMode = Graphics::CollisionMode::BoundingSphere;
+    filter.filterFunction = &SkyModelFilter;
+    cPlanet* p = SkyPlanetOf(VCall<Graphics::Model*>(world, 0x28, static_cast<const Math::Vector3*>(&a),
+                                                     static_cast<const Math::Vector3*>(&b), &factor, &filter));
+    return p ? p->mpPlanetRecord->mName.c_str() : nullptr;
+}
+
+vm::V3 FromPlanetFrame(const Math::Matrix3& m, const vm::V3& v) {
+    return {m.m[0][0] * v.x + m.m[1][0] * v.y + m.m[2][0] * v.z, m.m[0][1] * v.x + m.m[1][1] * v.y + m.m[2][1] * v.z,
+            m.m[0][2] * v.x + m.m[1][2] * v.y + m.m[2][2] * v.z};
+}
+
+const char16_t* PickSkyPlanet(cPlanet* active, const vm::V3& cam, const vm::V3& dir) {
+    auto* views = Sdk<cGameViewManager* (*)()>(GetAddress(Simulator::cGameViewManager, Get))();
+    auto* world = views ? VCall<Graphics::IModelWorld*>(views, 0x70) : nullptr;
+    if (!world || !HasSlot(world, 0x28, 0x748ca0))
+        return nullptr;
+    Math::Matrix3 m;
+    Va<void*(__cdecl*)(Math::Matrix3*, const Math::Quaternion*)>(raw::QuatToMatrix)(
+        &m, &static_cast<cSpatialObject*>(active)->mOrientation);
+    float scale = *Va<const float*>(raw::SkyFrameScale);
+    vm::V3 home = Position(active), solarDir = vm::Norm(FromPlanetFrame(m, dir));
+    if (!vm::Finite(solarDir) || !std::isfinite(scale) || !vm::Finite(home))
+        return nullptr;
+    if (const char16_t* name = PickSkyModel(world, home + FromPlanetFrame(m, cam) * scale, solarDir))
+        return name;
+    return PickSkyModel(world, home, solarDir);
+}
+
 struct NameTip {
     ResourceKey layout;
     bool parsed = false, shown = false;
@@ -584,6 +645,10 @@ const char16_t* SkyPlanetUnderMouse(App::cViewer* viewer) {
     float ground = water > 0 ? water : HeightAt(cam) - 1.0f;
     if (!(ground > 0) || RayHitsSphere(cam, dir, ground))
         return nullptr;
+    sky.active = active;
+    sky.system = system;
+    if (const char16_t* name = PickSkyPlanet(active, cam, dir))
+        return name;
     vm::V3 home = Position(active);
     const char16_t* best = nullptr;
     float bestScore = 1.0f;
