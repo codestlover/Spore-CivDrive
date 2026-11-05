@@ -11,6 +11,10 @@
 #include <Spore/Simulator/cCityWalls.h>
 #include <Spore/Simulator/cCivilization.h>
 #include <Spore/Simulator/cCommodityNode.h>
+#include <Spore/Simulator/cPlanet.h>
+#include <Spore/Simulator/cStar.h>
+#include <Spore/Simulator/cSolarSystem.h>
+#include <Spore/Simulator/SubSystem/SpacePlayerData.h>
 #include <Spore/Simulator/cCulturalTarget.h>
 #include <Spore/Simulator/cGameTerrainCursor.h>
 #include <Spore/Simulator/SubSystem/GameNounManager.h>
@@ -66,6 +70,15 @@ static_assert(offsetof(cCivilization, mPoliticalID) == 0x30, "cCivilization poli
 static_assert(offsetof(App::cCameraManager, mpViewer) == 0xb0, "cCameraManager::mpViewer");
 static_assert(offsetof(App::cCameraManager, mnActiveIndex) == 0xa8, "cCameraManager::mnActiveIndex");
 static_assert(offsetof(cGameModeManager, mActiveModeID) == 0x20, "cGameModeManager::mActiveModeID");
+static_assert(offsetof(SpacePlayerData, mpActivePlanet) == 0x4, "SpacePlayerData::mpActivePlanet");
+static_assert(offsetof(SpacePlayerData, mpActiveStar) == 0x8, "SpacePlayerData::mpActiveStar");
+static_assert(offsetof(SpacePlayerData, mCurrentContext) == 0x10, "SpacePlayerData::mCurrentContext");
+static_assert(offsetof(cStar, mpSolarSystem) == 0x40, "cStar::mpSolarSystem");
+static_assert(offsetof(cSolarSystem, mPlanets) == 0x10, "cSolarSystem::mPlanets");
+static_assert(offsetof(cPlanet, mpPlanetRecord) == 0x13c, "cPlanet::mpPlanetRecord");
+static_assert(offsetof(cPlanet, mGraphicRepresentationMode) == 0x158, "cPlanet::mGraphicRepresentationMode");
+static_assert(offsetof(cPlanet, mPlanetScale) == 0x184, "cPlanet::mPlanetScale");
+static_assert(offsetof(cPlanetRecord, mName) == 0x18, "cPlanetRecord::mName");
 
 namespace game {
 uintptr_t gBase = 0;
@@ -190,7 +203,8 @@ bool terrainCursorOk = false, viewManagerOk = false, cursorOk = false, rangeOk =
      cinematicOk = false, cityAttackOk = false, cityEditorOk = false, economicMenuOk = false,
      tradeContinuationOk = false, cityConvertOk = false, faithAttackOk = false, sceneryOk = false, bodiesOk = false,
      collisionOk = false, takeFireOk = false, retreatOk = false, relationsOk = false, effectsOk = false,
-     moveAnimOk = false, vehicleListOk = false, rocksOk = false, scrapeOk = false, waterOk = false;
+     moveAnimOk = false, vehicleListOk = false, rocksOk = false, scrapeOk = false, waterOk = false, skyOk = false,
+     nameTipOk = false;
 
 const void* economicCityMenu = nullptr;
 }
@@ -359,6 +373,13 @@ bool Verify() {
     waterOk = Bytes(raw::WaterLevel, "8379240074148b49248b018b500cffd2d9403cd84838d84034c3") &&
               Bytes(0xb817a2, "f30f10403cf30f594038f30f584034") &&
               uintptr_t(GetAddress(Simulator::cPlanetModel, GetHeightAt)) == Va<uintptr_t>(0xb7f0c0);
+    skyOk = uintptr_t(GetAddress(Simulator::SpacePlayerData, ptr)) == Va<uintptr_t>(raw::SpacePlayerDataPtr) &&
+            uintptr_t(GetAddress(App::cViewer, GetCameraToMouse)) == Va<uintptr_t>(0x7c49d0) &&
+            Bytes(raw::SkyPosition, "83ec6853558be9e874f33a008bd83bdd") && Bytes(0x1021110, "5133d2891424a18cda6d01") &&
+            Bytes(raw::SkyObjectType, "568b7424088bcee844d0c3ff84c07407") &&
+            Bytes(raw::SkyObjectScale, "807c240c008b4c2404741cf30f10048d30f36d01");
+    nameTipOk = Bytes(raw::ShowTooltip, "8a44240483ec205356578bf184c07508") &&
+                Bytes(0x835b33, "8b3d28f364018bf185ff740583c7f8eb") && uintptr_t(GetAddress(ResourceKey, Parse)) != 0;
     scrapeOk = soundOk && Bytes(raw::PlayAudioAt, "56e8eae64a008bf085f60f8480000000") &&
                Bytes(raw::StopAudio, "56e84ae64a008bf085f6743e");
     effectsOk = uintptr_t(GetAddress(Swarm::IEffectsManager, Get)) == Va<uintptr_t>(0x67dd90);
@@ -511,6 +532,123 @@ bool PlanetReady() {
 float WaterLevel() {
     auto* pm = Planet();
     return pm && waterOk ? Va<float(__thiscall*)(cPlanetModel*)>(raw::WaterLevel)(pm) : 0.0f;
+}
+
+namespace {
+float Angle(const vm::V3& a, const vm::V3& b) {
+    return std::acos(vm::Clamp(vm::Dot(a, b), -1.0f, 1.0f));
+}
+
+bool RayHitsSphere(const vm::V3& origin, const vm::V3& dir, float radius) {
+    float b = vm::Dot(origin, dir), c = vm::Dot(origin, origin) - radius * radius;
+    return c <= 0 || (b < 0 && b * b - c >= 0);
+}
+
+struct NameTip {
+    ResourceKey layout;
+    bool parsed = false, shown = false;
+} tip;
+
+char* TooltipManager() {
+    auto* p = *Va<char**>(raw::TooltipManagerPtr);
+    return p ? p - 8 : nullptr;
+}
+
+void CallShowTooltip(char* manager, bool show, const char16_t* text) {
+    Math::Point offset(0, 30.0f);
+    Va<void(__thiscall*)(char*, bool, void*, const ResourceKey*, uint32_t, const Math::Point*, const char16_t*, int,
+                         int, bool)>(raw::ShowTooltip)(manager, show, nullptr, &tip.layout, kTooltipControl, &offset,
+                                                       text, -1, 0, false);
+}
+}
+
+const char16_t* SkyPlanetUnderMouse(App::cViewer* viewer) {
+    if (!skyOk || !viewer)
+        return nullptr;
+    auto* data = *reinterpret_cast<SpacePlayerData**>(GetAddress(Simulator::SpacePlayerData, ptr));
+    if (!data || int(data->mCurrentContext) != 0)
+        return nullptr;
+    cPlanet* active = data->mpActivePlanet.get();
+    cStar* star = data->mpActiveStar.get();
+    cSolarSystem* system = star ? star->mpSolarSystem.get() : nullptr;
+    if (!active || !system)
+        return nullptr;
+    Math::Vector3 camSdk, dirSdk;
+    if (!Sdk<bool(__thiscall*)(const App::cViewer*, Math::Vector3*, Math::Vector3*)>(
+            GetAddress(App::cViewer, GetCameraToMouse))(viewer, &camSdk, &dirSdk))
+        return nullptr;
+    vm::V3 cam = FromSdk(camSdk), dir = vm::Norm(FromSdk(dirSdk));
+    if (!vm::Finite(cam) || !vm::Finite(dir) || vm::Dot(dir, dir) < 0.5f)
+        return nullptr;
+    float water = WaterLevel();
+    float ground = water > 0 ? water : HeightAt(cam) - 1.0f;
+    if (!(ground > 0) || RayHitsSphere(cam, dir, ground))
+        return nullptr;
+    vm::V3 home = Position(active);
+    const char16_t* best = nullptr;
+    float bestScore = 1.0f;
+    for (auto& entry : system->mPlanets) {
+        cPlanet* p = entry.get();
+        if (!p || p == active || int(p->mGraphicRepresentationMode) != 2 || !p->mpPlanetRecord ||
+            p->mpPlanetRecord->mName.empty())
+            continue;
+        float dist = vm::Len(Position(p) - home);
+        if (!(dist > 1e-3f) || !std::isfinite(dist))
+            continue;
+        int type = Va<int(__cdecl*)(cPlanet*)>(raw::SkyObjectType)(p);
+        float size = p->mPlanetScale * Va<float(__cdecl*)(int, float, bool)>(raw::SkyObjectScale)(type, dist, true);
+        Math::Vector3 localSdk;
+        Va<void(__thiscall*)(cPlanet*, Math::Vector3*)>(raw::SkyPosition)(p, &localSdk);
+        vm::V3 local = FromSdk(localSdk);
+        if (!vm::Finite(local) || !std::isfinite(size) || vm::Dot(local, local) < 1.0f)
+            continue;
+        float limit = std::fmax(std::atan2(std::fabs(size), dist), kSkyMinAngle) * kSkySlack;
+        float off = std::fmin(Angle(dir, vm::Norm(local)), Angle(dir, vm::Norm(local - cam)));
+        float score = off / limit;
+        if (score < bestScore) {
+            bestScore = score;
+            best = p->mpPlanetRecord->mName.c_str();
+        }
+    }
+    return best;
+}
+
+void ShowNameTooltip(const char16_t* text) {
+    char* manager = nameTipOk ? TooltipManager() : nullptr;
+    if (!manager || !text || !*text)
+        return;
+    if (!tip.parsed) {
+        tip.parsed = Sdk<bool (*)(ResourceKey&, const char16_t*, uint32_t, uint32_t)>(GetAddress(ResourceKey, Parse))(
+            tip.layout, u"Tooltips", kTooltipLayoutType, kTooltipLayoutGroup);
+        if (!tip.parsed)
+            return;
+    }
+    CallShowTooltip(manager, true, text);
+    tip.shown = true;
+    auto* window = *reinterpret_cast<UTFWin::IWindow**>(manager + 0xc);
+    auto* wm = Windows();
+    HWND hwnd = GameWindow();
+    POINT pt;
+    if (!window || !wm || !wm->GetMainWindow() || !hwnd || !GetCursorPos(&pt) || !ScreenToClient(hwnd, &pt))
+        return;
+    const auto& area = window->GetArea();
+    const auto& screen = wm->GetMainWindow()->GetRealArea();
+    float w = area.GetWidth(), h = area.GetHeight();
+    float x = vm::Clamp(float(pt.x) - w * 0.5f, 0.0f, std::fmax(0.0f, screen.GetWidth() - w));
+    float y = float(pt.y) + 30.0f;
+    if (y + h > screen.GetHeight())
+        y = float(pt.y) - 12.0f - h;
+    window->SetLocation(x, std::fmax(0.0f, y));
+}
+
+void HideNameTooltip() {
+    if (!tip.shown)
+        return;
+    tip.shown = false;
+    char* manager = nameTipOk ? TooltipManager() : nullptr;
+    if (!manager || *reinterpret_cast<void**>(manager + 0x10) || !*(manager + 0x2c))
+        return;
+    CallShowTooltip(manager, false, nullptr);
 }
 
 bool IsInWater(const vm::V3& p) {

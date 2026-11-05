@@ -28,6 +28,7 @@ constexpr float kTurnRate = 1.7f, kMouseDegreesPerPixel = 0.25f;
 constexpr float kEnterSeconds = 1.0f, kExitSeconds = 0.8f, kPilotVignette = 0.22f;
 constexpr DWORD kDoubleClickMs = 450, kDoubleShiftMs = 400;
 constexpr uint32_t kDrivenFrameColor = 0xffff2020;
+constexpr DWORD kSkyNameDelayMs = 250;
 constexpr float kLookUpMax = 1.25f;
 constexpr float kClickSlop = 4.0f;
 constexpr float kMarkerScale = 0.7f;
@@ -82,6 +83,8 @@ struct State {
     const void* orderTarget = nullptr;
     DWORD lastFireTick = 0, lastSelectCheck = 0;
     cGameData* hover = nullptr;
+    const char16_t* skyName = nullptr;
+    DWORD skySince = 0;
     bool hoverValid = false;
     int actKey = 0;
 
@@ -1032,6 +1035,26 @@ void UpdateOverlay() {
     }
 }
 
+void ClearSkyName() {
+    S.skyName = nullptr;
+    game::HideNameTooltip();
+}
+
+void UpdateSkyName() {
+    const char16_t* name = nullptr;
+    if (S.mode == Mode::Active && !S.cinematic && !S.orbit && !S.hover && game::GameHasFocus() && !game::MouseOverUI())
+        name = game::SkyPlanetUnderMouse(S.viewer);
+    DWORD now = Now();
+    if (name != S.skyName) {
+        S.skyName = name;
+        S.skySince = now;
+    }
+    if (name && now - S.skySince >= kSkyNameDelayMs)
+        game::ShowNameTooltip(name);
+    else
+        game::HideNameTooltip();
+}
+
 void UpdateOrbit(float dt) {
     if (S.orbit) {
         if (!Down(S.orbitVk) || !game::GameHasFocus()) {
@@ -1151,6 +1174,7 @@ void Unlock() {
     ClearContacts();
     game::WantCityRolloverHidden(false);
     overlay::Clear();
+    ClearSkyName();
 }
 
 void ForceIdle() {
@@ -1256,6 +1280,7 @@ void StartCinematic() {
     }
     RestoreCursor();
     overlay::Clear();
+    ClearSkyName();
     fx::Set(0, 1, 0);
     game::WantCityRolloverHidden(false);
     for (auto& k : S.swallowKey)
@@ -1298,6 +1323,8 @@ bool Validate() {
 }
 
 bool ControlledKey(int vk) {
+    if ((vk >= '0' && vk <= '9') || (vk >= VK_NUMPAD0 && vk <= VK_NUMPAD9))
+        return true;
     switch (vk) {
     case 'W':
     case 'A':
@@ -1508,8 +1535,10 @@ void AfterCivUpdate(float realSeconds) {
         UpdateAim();
         UpdateRaid();
         UpdateOverlay();
+        UpdateSkyName();
     } else {
         overlay::Clear();
+        ClearSkyName();
     }
 
     game::CamXf xf = PilotCamera(realDt);

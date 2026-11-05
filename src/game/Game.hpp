@@ -81,10 +81,21 @@ constexpr uint32_t LayoutFindWindow = 0x810650;
 constexpr uint32_t PlayAudioAt = 0x571f80;
 constexpr uint32_t StopAudio = 0x572020;
 constexpr uint32_t WaterLevel = 0xb7e4e0;
+constexpr uint32_t SpacePlayerDataPtr = 0x16dda8c;
+constexpr uint32_t SkyPosition = 0xc71d90;
+constexpr uint32_t SkyObjectType = 0x1034690;
+constexpr uint32_t SkyObjectScale = 0x1034640;
+constexpr uint32_t ShowTooltip = 0x8357c0;
+constexpr uint32_t TooltipManagerPtr = 0x164f328;
 }
 
 constexpr uint32_t kCollisionEffect = 0x21ab381;
 constexpr uint32_t kScrapeSound = 0x46ca1c64;
+constexpr uint32_t kTooltipControl = 0x3754e6c;
+constexpr uint32_t kTooltipLayoutType = 0x510a95b;
+constexpr uint32_t kTooltipLayoutGroup = 0x40464100;
+constexpr float kSkyMinAngle = 0.012f;
+constexpr float kSkySlack = 1.1f;
 
 enum : uint32_t {
     kSlotKeyDown = 0x24,
@@ -118,6 +129,9 @@ Simulator::cVehicle* ForeignVehicleStepBlocked(Simulator::cVehicle* controlled, 
 vm::V3 ContactPoint(Simulator::cVehicle* a, Simulator::cVehicle* b, bool transposed);
 bool VehicleDamage(Simulator::cVehicle* v, float fraction, uint32_t attacker, const vm::V3& at, bool lethal, int type);
 float WaterLevel();
+const char16_t* SkyPlanetUnderMouse(App::cViewer* viewer);
+void ShowNameTooltip(const char16_t* text);
+void HideNameTooltip();
 bool VehicleHeightSpan(Simulator::cVehicle* v, bool transposed, float& bottom, float& top);
 void PlayTakeFire(Simulator::cVehicle* v);
 bool HostileToPlayer(Simulator::cVehicle* v, Simulator::cVehicle* player);
