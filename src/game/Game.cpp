@@ -94,7 +94,8 @@ bool HasSlot(const void* obj, uint32_t offset, uint32_t expectedVa) {
     MEMORY_BASIC_INFORMATION mbi{};
     if (!vt || !VirtualQuery(vt + offset / 4, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
         return false;
-    return reinterpret_cast<uintptr_t>(vt[offset / 4]) == gBase + expectedVa - 0x400000;
+    uintptr_t have = reinterpret_cast<uintptr_t>(vt[offset / 4]);
+    return have == gBase + expectedVa - 0x400000 || (InImage(reinterpret_cast<uintptr_t>(vt)) && ForeignCode(have));
 }
 
 template <class R, class... A> R VCall(const void* obj, uint32_t offset, A... args) {
@@ -120,9 +121,7 @@ bool Bytes(uint32_t va, const char* hex) {
 bool Slot(uint32_t vtable, uint32_t offset, uint32_t expectedVa) {
     uintptr_t have = *Va<uintptr_t*>(vtable + offset);
     uintptr_t want = expectedVa ? uintptr_t(gBase + expectedVa - 0x400000) : 0;
-    if (have != want)
-        return false;
-    return true;
+    return have == want || (expectedVa && ForeignCode(have));
 }
 
 bool ForeignOrBytes(uint32_t va, const char* hex) {
@@ -209,8 +208,7 @@ bool OrderHookUsable() {
 }
 
 bool IsTradeContinuationCaller(uint32_t callerVa) {
-    return tradeContinuationOk &&
-           (callerVa == raw::TradeAcceptedOrder + 5 || callerVa == raw::TradeExistingOrder + 5);
+    return tradeContinuationOk && (callerVa == raw::TradeAcceptedOrder + 5 || callerVa == raw::TradeExistingOrder + 5);
 }
 
 bool EconomicMenuUsable() {
@@ -249,13 +247,15 @@ uintptr_t ForeignHookTarget(uint32_t va) {
     if (p[0] != 0xE9)
         return 0;
     uintptr_t target = uintptr_t(p) + 5 + *reinterpret_cast<const int32_t*>(p + 1);
-    if (InImage(target))
-        return 0;
+    return ForeignCode(target) ? target : 0;
+}
+
+bool ForeignCode(uintptr_t address) {
+    if (!address || InImage(address))
+        return false;
     MEMORY_BASIC_INFORMATION mbi{};
-    if (!VirtualQuery(reinterpret_cast<void*>(target), &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT ||
-        !(mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)))
-        return 0;
-    return target;
+    return VirtualQuery(reinterpret_cast<void*>(address), &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
+           (mbi.Protect & (PAGE_EXECUTE | PAGE_EXECUTE_READ | PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY));
 }
 
 bool ChainInFront(uint32_t va, void* hook) {
@@ -304,8 +304,7 @@ bool Verify() {
     sceneryOk = bodiesOk && Slot(raw::TerrainSphereVtable, 0xb0, 0xf97630) &&
                 Slot(raw::ModelWorldVtable, 0x4c, 0x74a0e0) &&
                 uintptr_t(GetAddress(Math::BoundingBox, ApplyTransform)) == Va<uintptr_t>(0x409dd0) &&
-                Bytes(0xb846dd, "8b4e248b118b92b0000000") &&
-                Bytes(0xf97630, "8b81d80700003b81dc070000") &&
+                Bytes(0xb846dd, "8b4e248b118b92b0000000") && Bytes(0xf97630, "8b81d80700003b81dc070000") &&
                 Bytes(0x74a299, "8b869c00000085c0744483b8cc00000000");
     ok &= ForeignOrBytes(raw::SetVelocity, "8b4424048b108991c80100008b500489");
     ok &= Bytes(0xbec240, "568bf18b46348b502c8d4e34ffd28b4c");
@@ -330,8 +329,8 @@ bool Verify() {
     orderHookOk = ForeignOrBytes(raw::AddOrder, "83ec1855578bf9e8b4b1ffff") &&
                   ForeignOrBytes(raw::AddOrderAt, "83ec1856578bf1e814e8ffff");
     tradeContinuationOk = orderHookOk && Bytes(0xdca213, "6a006a05568bcbe8811feeff") &&
-                          Bytes(0xdca43f, "8b4c243c6a006a0556e8531deeff") &&
-                          Bytes(0xcac1b4, "8b4c2428394810") && Bytes(0xcac242, "8946108b9708050000");
+                          Bytes(0xdca43f, "8b4c243c6a006a0556e8531deeff") && Bytes(0xcac1b4, "8b4c2428394810") &&
+                          Bytes(0xcac242, "8946108b9708050000");
     rolloverOk = Bytes(0xcf4f35, "8986e4000000") && Bytes(0xe35796, "8b4b1089b1a8000000") &&
                  Bytes(raw::RolloverRootWindow, "8b41486a015083c10ce89284feffc3cc") &&
                  Slot(raw::CursorAttachmentVtable, 0x10, 0xe35320);
@@ -340,13 +339,12 @@ bool Verify() {
                    Bytes(0xc9efc0, "8b4424048981280d00008981240d0000") && Bytes(0xdcd3ef, "8b471033f683e802") &&
                    Bytes(0xdce930, "6832229bee");
     cityConvertOk = orderHookOk && Bytes(0xcf36db, "83bf200b000001") && Bytes(0xcf3758, "6a03ffd0") &&
-                    Bytes(0xcf3781, "508bcee887faffff") &&
-                    Bytes(0xc9efc0, "8b4424048981280d00008981240d0000");
+                    Bytes(0xcf3781, "508bcee887faffff") && Bytes(0xc9efc0, "8b4424048981280d00008981240d0000");
     faithAttackOk = stanceOk && orderHookOk && rangeOk &&
-                  Bytes(raw::StopVehicleWeapons, "53578bf98b9f680c00002b9f640c0000") &&
-                  Bytes(raw::ChooseCultureTarget, "83ec20578bf98b078b502c897c240cffd284") &&
-                  Bytes(raw::ValidCombatTarget, "568b74240c85f6750432c05ec3") &&
-                  Bytes(0xc9efc0, "8b4424048981280d00008981240d0000");
+                    Bytes(raw::StopVehicleWeapons, "53578bf98b9f680c00002b9f640c0000") &&
+                    Bytes(raw::ChooseCultureTarget, "83ec20578bf98b078b502c897c240cffd284") &&
+                    Bytes(raw::ValidCombatTarget, "568b74240c85f6750432c05ec3") &&
+                    Bytes(0xc9efc0, "8b4424048981280d00008981240d0000");
     cityEditorOk = Bytes(0xcfe55a, "8b8ee80000008b898000000085c9740653") && Bytes(0xd124e5, "8bd9837b400056570f84") &&
                    Bytes(0xcf4bbc, "89b780000000");
     cinematicOk = uintptr_t(GetAddress(Simulator::cCinematicManager, Get)) == Va<uintptr_t>(0xb3d5d0) &&
@@ -373,9 +371,9 @@ bool Verify() {
                  Bytes(raw::ContinuousMoveAnimation, "8b811c0b000083e800741083e8017408") &&
                  Bytes(raw::MoveAnimationThreshold, "cdcccc3d");
     vehicleListOk = minimapOk && Bytes(0xceb5d4, "83fd04750233ed397cab6c") && Bytes(0xceb660, "686e513fee") &&
-                    Bytes(0xe255cf, "894e50") && Bytes(0xe25947, "c70620094801") &&
-                    Bytes(0xe23235, "8bbba4000000") && Bytes(0xe23250, "8b7704") &&
-                    Bytes(0xe27404, "6a0168e856f604") && Bytes(raw::LayoutFindWindow, "8b491485c97405e9");
+                    Bytes(0xe255cf, "894e50") && Bytes(0xe25947, "c70620094801") && Bytes(0xe23235, "8bbba4000000") &&
+                    Bytes(0xe23250, "8b7704") && Bytes(0xe27404, "6a0168e856f604") &&
+                    Bytes(raw::LayoutFindWindow, "8b491485c97405e9");
     rocksOk = sceneryOk && Bytes(0xb2efda, "8b450c8b48088b5010") && Bytes(0xb2eff3, "8b088b5018") &&
               Bytes(0xb2b47a, "6bff4c") && Bytes(0xb2b482, "8d6f04") &&
               uintptr_t(GetAddress(App::IPropManager, Get)) == Va<uintptr_t>(0x67ddf0) &&
@@ -387,15 +385,14 @@ bool Verify() {
         ok = false;
     ok &= Bytes(raw::ActOnTarget, "83ec3c53558b6c2448565733ff894c24");
     ok &= Bytes(raw::ShowEconomicMenu, "83ec1c53578bd933ff80bb3501000000");
-    economicMenuOk = ForeignOrBytes(raw::AddPieMenuItem, "83ec1856b8ac7b66018bf18b4c2420") &&
-                     uintptr_t(GetAddress(Simulator::cGameInputManager, Get)) == Va<uintptr_t>(0xb3d350) &&
-                     Slot(raw::GameInputManagerVtable, 0x30, 0xb1c480) &&
-                     Slot(raw::GameInputManagerVtable, 0x2c, 0xb1ba80) &&
-                     Bytes(0xb1c480, "568bf18d4660508d4e28e801fcffff") &&
-                     Bytes(0xce8c69, "8b44243483f8060f848400000083f80b") &&
-                     Bytes(0xce8d04, "6863ae07108bcdffd08bf8") && Bytes(0xce8c89, "685fdf03048bcdffd28bf0") &&
-                     Bytes(0xce8ddf, "8b4b5ce8f946e9ff") && Bytes(0xce8df1, "89bb0c010000") &&
-                     Bytes(0xb7c8e0, "8b0d7c816801568bf1") && Bytes(0xb7c932, "c7057c81680100000000");
+    economicMenuOk =
+        ForeignOrBytes(raw::AddPieMenuItem, "83ec1856b8ac7b66018bf18b4c2420") &&
+        uintptr_t(GetAddress(Simulator::cGameInputManager, Get)) == Va<uintptr_t>(0xb3d350) &&
+        Slot(raw::GameInputManagerVtable, 0x30, 0xb1c480) && Slot(raw::GameInputManagerVtable, 0x2c, 0xb1ba80) &&
+        Bytes(0xb1c480, "568bf18d4660508d4e28e801fcffff") && Bytes(0xce8c69, "8b44243483f8060f848400000083f80b") &&
+        Bytes(0xce8d04, "6863ae07108bcdffd08bf8") && Bytes(0xce8c89, "685fdf03048bcdffd28bf0") &&
+        Bytes(0xce8ddf, "8b4b5ce8f946e9ff") && Bytes(0xce8df1, "89bb0c010000") &&
+        Bytes(0xb7c8e0, "8b0d7c816801568bf1") && Bytes(0xb7c932, "c7057c81680100000000");
     ok &= Bytes(raw::ClearOrders, "56578bf98b8ff00a00006a0068f64f00");
     ok &= Bytes(raw::GameCivGet, "a1c8d26901c3");
     ok &= Bytes(raw::PlanetCameraGet, "a1ccea6701c3");
@@ -790,8 +787,7 @@ bool GetVehicles(cVehicle**& begin, cVehicle**& end) {
     return begin && end && begin < end;
 }
 
-bool VehicleStepBlocked(cVehicle* controlled, const vm::V3& from, const vm::V3& to, bool transposed,
-                        cVehicle** hit) {
+bool VehicleStepBlocked(cVehicle* controlled, const vm::V3& from, const vm::V3& to, bool transposed, cVehicle** hit) {
     if (hit)
         *hit = nullptr;
     vm::OBox body;
@@ -1331,8 +1327,8 @@ bool CityDefenseless(cCity* city) {
 }
 
 bool CityConvertible(cCity* city) {
-    return cityConvertOk && faithAttackOk && city && !city->cGameData::mbIsDestroyed && city->mPoliticalID != uint32_t(-1) &&
-           city->mPoliticalID != PlayerPoliticalID();
+    return cityConvertOk && faithAttackOk && city && !city->cGameData::mbIsDestroyed &&
+           city->mPoliticalID != uint32_t(-1) && city->mPoliticalID != PlayerPoliticalID();
 }
 
 cGameData* FaithTarget(cVehicle* v, cGameData* target) {
@@ -1386,8 +1382,7 @@ bool AimFaithWeapon(cVehicle* v, cGameData* target) {
 }
 
 bool AttackFaith(cVehicle* v, cGameData* target) {
-    if (!target || IsCityHall(target) || Cast(target, cCity::TYPE) ||
-        !FaithCombatTarget(v, target))
+    if (!target || IsCityHall(target) || Cast(target, cCity::TYPE) || !FaithCombatTarget(v, target))
         return false;
     Va<void(__thiscall*)(cVehicle*, cGameData*, int, int)>(raw::AddOrder)(v, target, 1, 1);
     Va<void(__thiscall*)(cVehicle*, int)>(0xc9efc0)(v, 0);
@@ -1403,7 +1398,8 @@ void StopFaithWeapon(cVehicle* v) {
     if (!faithAttackOk || !v || v->mPurpose != kVehicleCultural)
         return;
     if (origVehSetTarget)
-        reinterpret_cast<void(__thiscall*)(cCombatant*, cCombatant*)>(origVehSetTarget)(static_cast<cCombatant*>(v), nullptr);
+        reinterpret_cast<void(__thiscall*)(cCombatant*, cCombatant*)>(origVehSetTarget)(static_cast<cCombatant*>(v),
+                                                                                        nullptr);
     Va<int(__thiscall*)(cVehicle*)>(raw::StopVehicleWeapons)(v);
 }
 
@@ -1504,8 +1500,8 @@ UTFWin::IWindow* VehicleListFrame(cVehicle* v) {
         if (!item || *reinterpret_cast<uintptr_t*>(item) != Va<uintptr_t>(raw::PosseItemCivVtable) ||
             *reinterpret_cast<void**>(item + 0x50) != key)
             continue;
-        return Va<UTFWin::IWindow*(__thiscall*)(void*, uint32_t, bool)>(raw::LayoutFindWindow)(item + 0x7c,
-                                                                                               0x4f656e8, true);
+        return Va<UTFWin::IWindow*(__thiscall*)(void*, uint32_t, bool)>(raw::LayoutFindWindow)(item + 0x7c, 0x4f656e8,
+                                                                                               true);
     }
     return nullptr;
 }
@@ -1604,7 +1600,7 @@ void PlayTakeFire(cVehicle* v) {
         return;
     int track = Va<int (*)()>(raw::NewAudioTrack)();
     Sdk<void (*)(uint32_t, int)>(GetAddress(Audio, PlayAudio))(Va<const uint32_t*>(raw::TakeFireVoices)[purpose],
-                                                                track);
+                                                               track);
 }
 
 namespace {

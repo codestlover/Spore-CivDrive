@@ -60,7 +60,9 @@ inline bool Finite(const V3& a) {
     return std::isfinite(a.x) && std::isfinite(a.y) && std::isfinite(a.z);
 }
 
-struct Box { V3 lower, upper; };
+struct Box {
+    V3 lower, upper;
+};
 
 inline bool ValidBox(const Box& box) {
     return Finite(box.lower) && Finite(box.upper) && box.upper.x > box.lower.x + 1e-4f &&
@@ -72,44 +74,44 @@ inline Box ShiftBox(const Box& box, const V3& shift) {
 }
 
 inline Box SweptBox(const Box& box, const V3& step) {
-    return {box.lower + V3{std::fmin(0.0f,step.x), std::fmin(0.0f,step.y), std::fmin(0.0f,step.z)},
-            box.upper + V3{std::fmax(0.0f,step.x), std::fmax(0.0f,step.y), std::fmax(0.0f,step.z)}};
+    return {box.lower + V3{std::fmin(0.0f, step.x), std::fmin(0.0f, step.y), std::fmin(0.0f, step.z)},
+            box.upper + V3{std::fmax(0.0f, step.x), std::fmax(0.0f, step.y), std::fmax(0.0f, step.z)}};
 }
 
 inline bool BoxesOverlap(const Box& a, const Box& b) {
-    return a.lower.x < b.upper.x && a.upper.x > b.lower.x && a.lower.y < b.upper.y &&
-           a.upper.y > b.lower.y && a.lower.z < b.upper.z && a.upper.z > b.lower.z;
+    return a.lower.x < b.upper.x && a.upper.x > b.lower.x && a.lower.y < b.upper.y && a.upper.y > b.lower.y &&
+           a.lower.z < b.upper.z && a.upper.z > b.lower.z;
 }
 
 inline bool MovementEntersBox(const Box& moving, const V3& step, const Box& obstacle) {
-    if (!ValidBox(moving) || !ValidBox(obstacle) || !Finite(step) || Dot(step,step) < 1e-12f)
+    if (!ValidBox(moving) || !ValidBox(obstacle) || !Finite(step) || Dot(step, step) < 1e-12f)
         return false;
     V3 center = (moving.lower + moving.upper) * 0.5f;
     V3 half = (moving.upper - moving.lower) * 0.5f;
     V3 low = obstacle.lower - half, high = obstacle.upper + half;
-    float p[3]={center.x,center.y,center.z}, d[3]={step.x,step.y,step.z};
-    float lo[3]={low.x,low.y,low.z}, hi[3]={high.x,high.y,high.z};
-    if (BoxesOverlap(moving,obstacle)) {
-        float forward=1e30f, backward=1e30f;
-        for (int i=0;i<3;++i) {
+    float p[3] = {center.x, center.y, center.z}, d[3] = {step.x, step.y, step.z};
+    float lo[3] = {low.x, low.y, low.z}, hi[3] = {high.x, high.y, high.z};
+    if (BoxesOverlap(moving, obstacle)) {
+        float forward = 1e30f, backward = 1e30f;
+        for (int i = 0; i < 3; ++i) {
             if (std::fabs(d[i]) < 1e-7f)
                 continue;
-            float a=(lo[i]-p[i])/d[i], b=(hi[i]-p[i])/d[i];
-            forward=std::fmin(forward,std::fmax(a,b));
-            backward=std::fmin(backward,-std::fmin(a,b));
+            float a = (lo[i] - p[i]) / d[i], b = (hi[i] - p[i]) / d[i];
+            forward = std::fmin(forward, std::fmax(a, b));
+            backward = std::fmin(backward, -std::fmin(a, b));
         }
         return forward > backward + 1e-5f;
     }
-    float enter=0, leave=1;
-    for (int i=0;i<3;++i) {
+    float enter = 0, leave = 1;
+    for (int i = 0; i < 3; ++i) {
         if (std::fabs(d[i]) < 1e-7f) {
             if (p[i] <= lo[i] || p[i] >= hi[i])
                 return false;
             continue;
         }
-        float a=(lo[i]-p[i])/d[i], b=(hi[i]-p[i])/d[i];
-        enter=std::fmax(enter,std::fmin(a,b));
-        leave=std::fmin(leave,std::fmax(a,b));
+        float a = (lo[i] - p[i]) / d[i], b = (hi[i] - p[i]) / d[i];
+        enter = std::fmax(enter, std::fmin(a, b));
+        leave = std::fmin(leave, std::fmax(a, b));
         if (enter >= leave)
             return false;
     }

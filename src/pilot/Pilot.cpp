@@ -1349,8 +1349,8 @@ bool SwitchClick(float x, float y) {
     if (v == S.veh)
         v = nullptr;
     DWORD now = Now();
-    if (v && v == S.lastClickVeh && now - S.lastClickTick <= kDoubleClickMs &&
-        std::fabs(x - S.lastClickX) < 30 && std::fabs(y - S.lastClickY) < 30) {
+    if (v && v == S.lastClickVeh && now - S.lastClickTick <= kDoubleClickMs && std::fabs(x - S.lastClickX) < 30 &&
+        std::fabs(y - S.lastClickY) < 30) {
         S.lastClickVeh = nullptr;
         RequestEnter(v);
         return true;
@@ -1391,8 +1391,8 @@ bool OnMouseDown(int button, float x, float y) {
         return false;
     cVehicle* v = game::PlayerVehicle(game::PickHovered());
     DWORD now = Now();
-    if (v && v == S.lastClickVeh && now - S.lastClickTick <= kDoubleClickMs &&
-        std::fabs(x - S.lastClickX) < 12 && std::fabs(y - S.lastClickY) < 12) {
+    if (v && v == S.lastClickVeh && now - S.lastClickTick <= kDoubleClickMs && std::fabs(x - S.lastClickX) < 12 &&
+        std::fabs(y - S.lastClickY) < 12) {
         S.lastClickVeh = nullptr;
         S.swallowBtn[0] = true;
         RequestEnter(v);
@@ -1609,8 +1609,8 @@ bool LimitOtherVehicleMove(const void* spatial, const float* position, float all
     if (!Piloting() || !S.lock || !S.veh || S.cinematic || spatial == S.sp || !position)
         return false;
     V3 limit;
-    cVehicle* other = game::ForeignVehicleStepBlocked(S.veh, spatial, {position[0], position[1], position[2]},
-                                                      S.transposed, limit);
+    cVehicle* other =
+        game::ForeignVehicleStepBlocked(S.veh, spatial, {position[0], position[1], position[2]}, S.transposed, limit);
     if (!other)
         return false;
     NoteContact(other, false);
@@ -1672,17 +1672,16 @@ bool RefuseOrder(const void* vehicle, const void* target, int kind, uint32_t va)
         return false;
     if (S.purpose == kVehicleEconomic && kind == game::kOrderBribeNode) {
         auto* node = static_cast<cGameData*>(const_cast<void*>(target));
-        if (!S.sp || !game::EconomicTarget(S.veh, node) ||
-            EconomicSpiceRange(node, game::Position(S.sp)) != 1) {
+        if (!S.sp || !game::EconomicTarget(S.veh, node) || EconomicSpiceRange(node, game::Position(S.sp)) != 1) {
             game::PlayRefusal();
             return true;
         }
     }
     if (S.ownAct)
         return false;
-    if (S.purpose == kVehicleEconomic && S.uiOrderSet && target && target == S.uiOrder &&
-        kind == game::kOrderTrade && game::IsTradeContinuationCaller(va) &&
-        game::CurrentOrderTarget(S.veh) == target && game::CurrentOrderKind(S.veh) == game::kOrderProposeTrade)
+    if (S.purpose == kVehicleEconomic && S.uiOrderSet && target && target == S.uiOrder && kind == game::kOrderTrade &&
+        game::IsTradeContinuationCaller(va) && game::CurrentOrderTarget(S.veh) == target &&
+        game::CurrentOrderKind(S.veh) == game::kOrderProposeTrade)
         return false;
     if ((va >= 0xcf2000 && va < 0xcf8000) || (S.rolloverClickTick && Now() - S.rolloverClickTick < 600)) {
         S.uiOrderSet = true;
