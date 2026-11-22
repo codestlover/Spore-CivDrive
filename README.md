@@ -5,7 +5,7 @@ Third-person control of your own vehicles in the **Civilization stage** of *Spor
 your land vehicles, ships or aircraft and drive it yourself: the camera sits behind it, WASD drives, the mouse aims
 and fires. Everything the vehicle does still goes through the game's own rules, ranges and cursors.
 
-Current version: **1.0.14**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
+Current version: **1.0.15**. Download `CivDrive.sporemod` from the [Releases](../../releases) page.
 
 ## Controls
 
@@ -113,6 +113,12 @@ the Galactic Adventures "march2017" code (`SporeApp_ModAPIFix.exe`, or the Octob
 has the same code). If the code is different, or another mod changed the same places in an unexpected way, CivDrive
 changes nothing and a double click on a vehicle simply does nothing.
 
+It works on Windows as well as under Wine and Proton, with Steam, EA app and GOG copies alike. On Windows, address
+space layout randomization (ASLR) can load the game away from its usual address, and the loader then adjusts every
+address stored in the game's code to match. CivDrive reaches every game function and value through the address the
+game was actually loaded at, and its byte checks take the loader's adjustments back out, so they compare the same
+code wherever the game sits. Up to 1.0.14 those checks failed on Windows and the mod did nothing there.
+
 Mods that hook the same game functions work alongside it, in any load order. For example,
 [Civ Challenge](https://github.com/codestlover/Spore-CivChallenge) also hooks vehicle orders and the start of a spice
 derrick: CivDrive puts its hook in front of the other mod's, the other mod does the same, and both run. Orders that
@@ -188,17 +194,19 @@ and `--msvc-sdk PATH`, and reads `CIV_DEPS` from the environment.
 
 ### Testing and releases
 
-Releases are checked with an offline replica of the mod's own code checks against the game executable, a test of the
-vector maths, and a Wine test that the game's caller of an order is found through another mod's hook in front of
-CivDrive's. These tools and the packaging scripts work on the game's own code, which cannot be redistributed, so they
-are not part of this repository, and the `.sporemod` is only published on the [Releases](../../releases) page.
+Releases are checked with an offline replica of the mod's own code checks against the game executable, the same
+checks against the EA/Origin and Steam executables mapped at other base addresses with the loader's relocations
+applied, a Wine test of the relocation reader on those images, a test of the vector maths, and a Wine test that the
+game's caller of an order is found through another mod's hook in front of CivDrive's. These tools and the packaging
+scripts work on the game's own code, which cannot be redistributed, so they are not part of this repository, and the
+`.sporemod` is only published on the [Releases](../../releases) page.
 
 ## Project layout
 
 | Path | Contents |
 | --- | --- |
 | `src/core` | Entry point and hooks, the fixed tuning values |
-| `src/game` | Access to the game: functions through the ModAPI SDK's address table and raw addresses, each checked byte for byte; the caller detection |
+| `src/game` | Access to the game: functions through the ModAPI SDK's address table and raw addresses, each checked byte for byte at whatever address the game is loaded; the caller detection |
 | `src/pilot` | The control mode: input, driving, camera, attacks, spice claims, raids, the minimap marker |
 | `src/render` | The transition layer with its shader, the range rings and the minimap marker |
 | `src/math` | Vector maths |
