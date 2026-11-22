@@ -1,6 +1,7 @@
 
 #include "game/Game.hpp"
 #include "game/Callers.hpp"
+#include "game/Reloc.hpp"
 #include <Spore/ModAPI.h>
 #include <Spore/App/IMessageManager.h>
 #include <Spore/App/cViewer.h>
@@ -121,12 +122,37 @@ template <class R, class... A> R VCall(const void* obj, uint32_t offset, A... ar
     return fn(obj, args...);
 }
 
+bool RelocReadable() {
+    static int readable = -1;
+    if (readable < 0) {
+        auto* image = reinterpret_cast<const unsigned char*>(gBase);
+        const IMAGE_DATA_DIRECTORY* dir = reloc::Directory(image, ImageSize());
+        MEMORY_BASIC_INFORMATION mbi{};
+        readable = dir && VirtualQuery(image + dir->VirtualAddress, &mbi, sizeof(mbi)) && mbi.State == MEM_COMMIT &&
+                   !(mbi.Protect & PAGE_GUARD) &&
+                   (mbi.Protect & (PAGE_READONLY | PAGE_READWRITE | PAGE_WRITECOPY | PAGE_EXECUTE_READ |
+                                   PAGE_EXECUTE_READWRITE | PAGE_EXECUTE_WRITECOPY)) &&
+                   uintptr_t(mbi.BaseAddress) + mbi.RegionSize >= uintptr_t(image + dir->VirtualAddress + dir->Size);
+    }
+    return readable > 0;
+}
+
 bool Bytes(uint32_t va, const char* hex) {
     auto* p = Va<const unsigned char*>(va);
     size_t n = strlen(hex) / 2;
     MEMORY_BASIC_INFORMATION mbi{};
     if (!VirtualQuery(p, &mbi, sizeof(mbi)) || mbi.State != MEM_COMMIT)
         return false;
+    unsigned char moved[64];
+    if (gBase != reloc::kPreferredBase) {
+        if (n > sizeof(moved) || !RelocReadable())
+            return false;
+        std::memcpy(moved, p, n);
+        if (!reloc::Unrelocate(reinterpret_cast<const unsigned char*>(gBase), ImageSize(), gBase, va - 0x400000, moved,
+                               n))
+            return false;
+        p = moved;
+    }
     for (size_t i = 0; i < n; ++i) {
         unsigned v = 0;
         sscanf(hex + 2 * i, "%2x", &v);

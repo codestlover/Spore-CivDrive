@@ -163,6 +163,7 @@ bool AllowPieMenuItem(const void* menu, uint32_t command);
 bool PieMenuOpen();
 uintptr_t ForeignHookTarget(uint32_t va);
 bool ForeignCode(uintptr_t address);
+size_t ImageSize();
 bool InImage(uintptr_t address);
 bool ChainInFront(uint32_t va, void* hook);
 uint32_t ImageVa(uintptr_t address);
